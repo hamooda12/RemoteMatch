@@ -1,12 +1,9 @@
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
-from app.main import app
-
-client = TestClient(app)
 
 
-def test_health_endpoint() -> None:
+def test_health_endpoint(client: TestClient) -> None:
     settings = get_settings()
 
     response = client.get("/api/v1/health")
@@ -20,7 +17,7 @@ def test_health_endpoint() -> None:
     }
 
 
-def test_database_health_endpoint() -> None:
+def test_database_health_endpoint(client: TestClient) -> None:
     response = client.get("/api/v1/health/database")
 
     assert response.status_code == 200
