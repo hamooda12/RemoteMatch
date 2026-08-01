@@ -5,3 +5,6 @@ httpx
 sqlalchemy[asyncio]
 psycopg[binary]
 alembic
+pwdlib[argon2]
+email-validator
+itsdangerous

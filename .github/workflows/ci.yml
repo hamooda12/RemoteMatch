@@ -20,6 +20,7 @@ jobs:
           POSTGRES_DB: remotematch_test
           POSTGRES_USER: remotematch
           POSTGRES_PASSWORD: remotematch_test
+          
         ports:
           - 5432:5432
         options: >-
@@ -32,7 +33,7 @@ jobs:
       ENVIRONMENT: test
       DEBUG: false
       DATABASE_URL: postgresql+psycopg://remotematch:remotematch_test@localhost:5432/remotematch_test
-
+      SESSION_SECRET: test-session-key-with-at-least-32-characters
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
