@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.user import User
 
+VALID_TEST_PASSWORD = "a" * 16
+INVALID_TEST_PASSWORD = "b" * 16
+
 
 @pytest.fixture
 def registration_email() -> Iterator[str]:
@@ -38,7 +41,7 @@ def test_register_user_and_reject_duplicate(
     payload = {
         "email": registration_email,
         "display_name": "Test User",
-        "password": "Correct-Horse-Battery-42",
+        "password": VALID_TEST_PASSWORD,
     }
 
     response = client.post("/api/v1/auth/register", json=payload)
@@ -77,7 +80,7 @@ def test_login_current_user_and_logout(
     client: TestClient,
     registration_email: str,
 ) -> None:
-    password = "Correct-Horse-Battery-42"
+    password = VALID_TEST_PASSWORD
 
     registration_response = client.post(
         "/api/v1/auth/register",
@@ -124,17 +127,14 @@ def test_login_rejects_invalid_credentials(
         json={
             "email": registration_email,
             "display_name": "Test User",
-            "password": "Correct-Horse-Battery-42",
+            "password": VALID_TEST_PASSWORD,
         },
     )
     assert registration_response.status_code == 201
 
     login_response = client.post(
         "/api/v1/auth/login",
-        json={
-            "email": registration_email,
-            "password": "Wrong-Password-123",
-        },
+        json={"email": registration_email, "password": INVALID_TEST_PASSWORD},
     )
 
     assert login_response.status_code == 401
