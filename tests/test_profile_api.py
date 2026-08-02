@@ -12,6 +12,15 @@ from app.models.user import User
 PROFILE_TEST_VALUE = "c" * 16
 
 
+def csrf_headers(client: TestClient) -> dict[str, str]:
+    response = client.get("/api/v1/auth/csrf")
+    assert response.status_code == 200
+
+    return {
+        "X-CSRF-Token": response.json()["csrf_token"],
+    }
+
+
 @pytest.fixture
 def created_emails() -> Iterator[list[str]]:
     emails: list[str] = []
@@ -79,8 +88,16 @@ def test_create_update_and_get_profile(
 
     user_id = register_and_login(client, email)
 
-    missing_response = client.get("/api/v1/profile")
-    assert missing_response.status_code == 404
+    missing_profile_response = client.get("/api/v1/profile")
+    assert missing_profile_response.status_code == 404
+
+    missing_csrf_response = client.put(
+        "/api/v1/profile",
+        json={},
+    )
+    assert missing_csrf_response.status_code == 403
+
+    headers = csrf_headers(client)
 
     payload = {
         "location": "  Hebron, Palestine  ",
@@ -99,7 +116,11 @@ def test_create_update_and_get_profile(
         },
     }
 
-    put_response = client.put("/api/v1/profile", json=payload)
+    put_response = client.put(
+        "/api/v1/profile",
+        json=payload,
+        headers=headers,
+    )
 
     assert put_response.status_code == 200
     assert put_response.json()["user_id"] == user_id
@@ -124,6 +145,7 @@ def test_create_update_and_get_profile(
             "timezone": "UTC",
             "target_roles": ["Software Engineer"],
         },
+        headers=headers,
     )
 
     assert replacement_response.status_code == 200
@@ -143,6 +165,7 @@ def test_profiles_are_isolated_between_users(
     created_emails.extend([first_email, second_email])
 
     register_and_login(client, first_email)
+    first_headers = csrf_headers(client)
 
     first_profile_response = client.put(
         "/api/v1/profile",
@@ -150,10 +173,14 @@ def test_profiles_are_isolated_between_users(
             "timezone": "Asia/Hebron",
             "target_roles": ["Backend Engineer"],
         },
+        headers=first_headers,
     )
     assert first_profile_response.status_code == 200
 
-    logout_response = client.post("/api/v1/auth/logout")
+    logout_response = client.post(
+        "/api/v1/auth/logout",
+        headers=first_headers,
+    )
     assert logout_response.status_code == 200
 
     register_and_login(client, second_email)

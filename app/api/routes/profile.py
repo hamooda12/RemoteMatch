@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.profile import ProfileResponse, ProfileUpsert
 from app.security.authentication import get_current_user
+from app.security.csrf import verify_csrf_token
 from app.services.profile import ProfileNotFoundError, ProfileService
 
 router = APIRouter(
@@ -16,6 +17,7 @@ router = APIRouter(
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+CsrfProtection = Annotated[None, Depends(verify_csrf_token)]
 
 
 @router.get("", response_model=ProfileResponse)
@@ -39,6 +41,7 @@ async def upsert_profile(
     payload: ProfileUpsert,
     current_user: CurrentUser,
     database: DatabaseSession,
+    _csrf: CsrfProtection,
 ) -> ProfileResponse:
     profile = await ProfileService(database).upsert_profile(
         current_user.id,

@@ -6,12 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import (
+    CsrfTokenResponse,
     LoginRequest,
     MessageResponse,
     RegisterRequest,
     UserResponse,
 )
 from app.security.authentication import get_current_user
+from app.security.csrf import (
+    get_or_create_csrf_token,
+    issue_csrf_token,
+    verify_csrf_token,
+)
 from app.services.auth import (
     AuthService,
     EmailAlreadyRegisteredError,
@@ -25,6 +31,7 @@ router = APIRouter(
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+CsrfProtection = Annotated[None, Depends(verify_csrf_token)]
 
 
 @router.post(
@@ -61,12 +68,24 @@ async def login_user(
 
     request.session.clear()
     request.session["user_id"] = str(user.id)
+    issue_csrf_token(request)
 
     return user
 
 
+@router.get("/csrf", response_model=CsrfTokenResponse)
+async def get_csrf_token(
+    request: Request,
+    _current_user: CurrentUser,
+) -> CsrfTokenResponse:
+    return CsrfTokenResponse(csrf_token=get_or_create_csrf_token(request))
+
+
 @router.post("/logout", response_model=MessageResponse)
-async def logout_user(request: Request) -> MessageResponse:
+async def logout_user(
+    request: Request,
+    _csrf: CsrfProtection,
+) -> MessageResponse:
     request.session.clear()
     return MessageResponse(message="Logged out successfully.")
 

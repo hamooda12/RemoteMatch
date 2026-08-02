@@ -13,6 +13,15 @@ VALID_TEST_PASSWORD = "a" * 16
 INVALID_TEST_PASSWORD = "b" * 16
 
 
+def csrf_headers(client: TestClient) -> dict[str, str]:
+    response = client.get("/api/v1/auth/csrf")
+    assert response.status_code == 200
+
+    return {
+        "X-CSRF-Token": response.json()["csrf_token"],
+    }
+
+
 @pytest.fixture
 def registration_email() -> Iterator[str]:
     email = f"user-{uuid4()}@example.com"
@@ -80,14 +89,12 @@ def test_login_current_user_and_logout(
     client: TestClient,
     registration_email: str,
 ) -> None:
-    password = VALID_TEST_PASSWORD
-
     registration_response = client.post(
         "/api/v1/auth/register",
         json={
             "email": registration_email,
             "display_name": "Test User",
-            "password": password,
+            "password": VALID_TEST_PASSWORD,
         },
     )
     assert registration_response.status_code == 201
@@ -96,7 +103,7 @@ def test_login_current_user_and_logout(
         "/api/v1/auth/login",
         json={
             "email": registration_email,
-            "password": password,
+            "password": VALID_TEST_PASSWORD,
         },
     )
 
@@ -109,7 +116,10 @@ def test_login_current_user_and_logout(
     assert current_user_response.status_code == 200
     assert current_user_response.json()["email"] == registration_email
 
-    logout_response = client.post("/api/v1/auth/logout")
+    logout_response = client.post(
+        "/api/v1/auth/logout",
+        headers=csrf_headers(client),
+    )
 
     assert logout_response.status_code == 200
     assert logout_response.json() == {"message": "Logged out successfully."}
@@ -134,8 +144,52 @@ def test_login_rejects_invalid_credentials(
 
     login_response = client.post(
         "/api/v1/auth/login",
-        json={"email": registration_email, "password": INVALID_TEST_PASSWORD},
+        json={
+            "email": registration_email,
+            "password": INVALID_TEST_PASSWORD,
+        },
     )
 
     assert login_response.status_code == 401
     assert login_response.json() == {"detail": "Invalid email or password."}
+
+
+def test_logout_requires_valid_csrf_token(
+    client: TestClient,
+    registration_email: str,
+) -> None:
+    registration_response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": registration_email,
+            "display_name": "Test User",
+            "password": VALID_TEST_PASSWORD,
+        },
+    )
+    assert registration_response.status_code == 201
+
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": registration_email,
+            "password": VALID_TEST_PASSWORD,
+        },
+    )
+    assert login_response.status_code == 200
+
+    missing_token_response = client.post("/api/v1/auth/logout")
+    assert missing_token_response.status_code == 403
+
+    invalid_token_response = client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": "invalid"},
+    )
+    assert invalid_token_response.status_code == 403
+
+    assert client.get("/api/v1/auth/me").status_code == 200
+
+    valid_logout_response = client.post(
+        "/api/v1/auth/logout",
+        headers=csrf_headers(client),
+    )
+    assert valid_logout_response.status_code == 200
