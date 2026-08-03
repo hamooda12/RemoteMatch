@@ -24,6 +24,17 @@ class CVDocumentService:
 
         return document
 
+    async def get_download_document(
+        self,
+        user_id: UUID,
+    ) -> CVDocument:
+        document = await self.documents.get_with_file_data(user_id)
+
+        if document is None:
+            raise CVDocumentNotFoundError
+
+        return document
+
     async def save_document(
         self,
         user_id: UUID,
@@ -53,3 +64,12 @@ class CVDocumentService:
         await self.database.refresh(document)
 
         return document
+
+    async def delete_document(self, user_id: UUID) -> None:
+        document = await self.documents.get_by_user_id(user_id)
+
+        if document is None:
+            raise CVDocumentNotFoundError
+
+        await self.documents.delete(document)
+        await self.database.commit()

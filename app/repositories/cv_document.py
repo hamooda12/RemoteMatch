@@ -1,6 +1,8 @@
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app.models.cv_document import CVDocument
 
@@ -14,6 +16,17 @@ class CVDocumentRepository:
         user_id: UUID,
     ) -> CVDocument | None:
         return await self.database.get(CVDocument, user_id)
+
+    async def get_with_file_data(
+        self,
+        user_id: UUID,
+    ) -> CVDocument | None:
+        result = await self.database.execute(
+            select(CVDocument)
+            .options(undefer(CVDocument.file_data))
+            .where(CVDocument.user_id == user_id)
+        )
+        return result.scalar_one_or_none()
 
     async def create(
         self,
@@ -37,3 +50,6 @@ class CVDocumentRepository:
             setattr(document, field_name, value)
 
         return document
+
+    async def delete(self, document: CVDocument) -> None:
+        await self.database.delete(document)

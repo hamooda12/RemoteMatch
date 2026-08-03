@@ -60,6 +60,7 @@ class CVDocument(Base):
     file_data: Mapped[bytes] = mapped_column(
         LargeBinary,
         nullable=False,
+        deferred=True,
     )
 
     parse_status: Mapped[str] = mapped_column(

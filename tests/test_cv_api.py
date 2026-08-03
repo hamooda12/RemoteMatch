@@ -179,7 +179,15 @@ def test_upload_and_get_pdf_cv(
 
     assert get_response.status_code == 200
     assert get_response.json() == response_data
+    download_response = client.get("/api/v1/cv/download")
 
+    assert download_response.status_code == 200
+    assert download_response.content == TEST_PDF_DATA
+    assert download_response.headers["content-type"] == PDF_MEDIA_TYPE
+    assert "attachment" in download_response.headers["content-disposition"]
+    assert "candidate-resume.pdf" in download_response.headers["content-disposition"]
+    assert download_response.headers["cache-control"] == "private, no-store"
+    assert download_response.headers["x-content-type-options"] == "nosniff"
     engine = create_engine(get_settings().database_url)
 
     with Session(engine) as database:
@@ -334,3 +342,55 @@ def test_cv_documents_are_isolated_between_users(
 
     assert second_user_response.status_code == 404
     assert second_user_response.json() == {"detail": "CV not found."}
+    second_download_response = client.get("/api/v1/cv/download")
+    assert second_download_response.status_code == 404
+
+
+def test_delete_cv_requires_csrf_and_removes_document(
+    client: TestClient,
+    created_emails: list[str],
+) -> None:
+    email = f"cv-delete-{uuid4()}@example.com"
+    created_emails.append(email)
+
+    register_and_login(client, email)
+    headers = csrf_headers(client)
+
+    upload_response = client.post(
+        "/api/v1/cv",
+        headers=headers,
+        files={
+            "file": (
+                "delete-me.pdf",
+                TEST_PDF_DATA,
+                PDF_MEDIA_TYPE,
+            ),
+        },
+    )
+    assert upload_response.status_code == 200
+
+    missing_csrf_response = client.delete("/api/v1/cv")
+    assert missing_csrf_response.status_code == 403
+
+    invalid_csrf_response = client.delete(
+        "/api/v1/cv",
+        headers={"X-CSRF-Token": "invalid"},
+    )
+    assert invalid_csrf_response.status_code == 403
+
+    delete_response = client.delete(
+        "/api/v1/cv",
+        headers=headers,
+    )
+
+    assert delete_response.status_code == 204
+    assert delete_response.content == b""
+
+    assert client.get("/api/v1/cv").status_code == 404
+    assert client.get("/api/v1/cv/download").status_code == 404
+
+    second_delete_response = client.delete(
+        "/api/v1/cv",
+        headers=headers,
+    )
+    assert second_delete_response.status_code == 404

@@ -1,10 +1,12 @@
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
     HTTPException,
+    Response,
     UploadFile,
     status,
 )
@@ -57,6 +59,35 @@ async def get_cv(
     return CVDocumentResponse.model_validate(document)
 
 
+@router.get("/download")
+async def download_cv(
+    current_user: CurrentUser,
+    database: DatabaseSession,
+) -> Response:
+    try:
+        document = await CVDocumentService(database).get_download_document(current_user.id)
+    except CVDocumentNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="CV not found.",
+        ) from error
+
+    encoded_filename = quote(
+        document.original_filename,
+        safe="",
+    )
+
+    return Response(
+        content=document.file_data,
+        media_type=document.media_type,
+        headers={
+            "Content-Disposition": (f"attachment; filename*=UTF-8''{encoded_filename}"),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.post("", response_model=CVDocumentResponse)
 async def upload_cv(
     file: UploadedCV,
@@ -94,3 +125,24 @@ async def upload_cv(
     )
 
     return CVDocumentResponse.model_validate(document)
+
+
+@router.delete(
+    "",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_cv(
+    current_user: CurrentUser,
+    database: DatabaseSession,
+    _csrf: CsrfProtection,
+) -> Response:
+    try:
+        await CVDocumentService(database).delete_document(current_user.id)
+    except CVDocumentNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="CV not found.",
+        ) from error
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
