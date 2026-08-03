@@ -12,7 +12,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -72,6 +72,19 @@ class CVDocument(Base):
 
     extracted_text: Mapped[str | None] = mapped_column(
         Text,
+        nullable=True,
+        deferred=True,
+    )
+    extracted_skills: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+        deferred=True,
+    )
+
+    skills_extraction_version: Mapped[str | None] = mapped_column(
+        String(50),
         nullable=True,
         deferred=True,
     )

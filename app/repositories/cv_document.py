@@ -39,6 +39,20 @@ class CVDocumentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_with_extracted_skills(
+        self,
+        user_id: UUID,
+    ) -> CVDocument | None:
+        result = await self.database.execute(
+            select(CVDocument)
+            .options(
+                undefer(CVDocument.extracted_skills),
+                undefer(CVDocument.skills_extraction_version),
+            )
+            .where(CVDocument.user_id == user_id)
+        )
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         *,

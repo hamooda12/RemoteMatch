@@ -359,3 +359,197 @@ def test_reupload_resets_extracted_text(
 
     assert second_parse_response.status_code == 200
     assert second_parse_response.json()["extracted_text"] == second_text
+
+
+def test_cv_skills_require_authentication_and_processed_cv(
+    client: TestClient,
+    created_emails: list[str],
+) -> None:
+    unauthenticated_response = client.get("/api/v1/cv/skills")
+    assert unauthenticated_response.status_code == 401
+
+    email = f"skills-security-{uuid4()}@example.com"
+    created_emails.append(email)
+
+    register_and_login(client, email)
+
+    missing_cv_response = client.get("/api/v1/cv/skills")
+    assert missing_cv_response.status_code == 404
+    assert missing_cv_response.json() == {"detail": "CV not found."}
+
+    upload_response = client.post(
+        "/api/v1/cv",
+        headers=csrf_headers(client),
+        files={
+            "file": (
+                "pending-resume.pdf",
+                create_text_pdf("Python FastAPI Developer"),
+                PDF_MEDIA_TYPE,
+            ),
+        },
+    )
+    assert upload_response.status_code == 200
+
+    pending_response = client.get("/api/v1/cv/skills")
+
+    assert pending_response.status_code == 409
+    assert pending_response.json() == {
+        "detail": "CV skills are not available.",
+    }
+
+
+def test_parsing_persists_and_returns_normalized_skills(
+    client: TestClient,
+    created_emails: list[str],
+) -> None:
+    email = f"skills-extraction-{uuid4()}@example.com"
+    created_emails.append(email)
+
+    user_id = register_and_login(client, email)
+    headers = csrf_headers(client)
+
+    upload_response = client.post(
+        "/api/v1/cv",
+        headers=headers,
+        files={
+            "file": (
+                "skills-resume.pdf",
+                create_text_pdf("Python FastAPI postgres React.js JavaScript"),
+                PDF_MEDIA_TYPE,
+            ),
+        },
+    )
+    assert upload_response.status_code == 200
+
+    parse_response = client.post(
+        "/api/v1/cv/parse",
+        headers=headers,
+    )
+    assert parse_response.status_code == 200
+
+    skills_response = client.get("/api/v1/cv/skills")
+
+    assert skills_response.status_code == 200
+    assert skills_response.json() == {
+        "user_id": user_id,
+        "skills": [
+            "Python",
+            "FastAPI",
+            "PostgreSQL",
+            "React",
+            "JavaScript",
+        ],
+        "skill_count": 5,
+        "extraction_version": "taxonomy-v1",
+    }
+    assert skills_response.headers["cache-control"] == "private, no-store"
+
+
+def test_cv_skills_allow_empty_results(
+    client: TestClient,
+    created_emails: list[str],
+) -> None:
+    email = f"skills-empty-{uuid4()}@example.com"
+    created_emails.append(email)
+
+    user_id = register_and_login(client, email)
+    headers = csrf_headers(client)
+
+    upload_response = client.post(
+        "/api/v1/cv",
+        headers=headers,
+        files={
+            "file": (
+                "no-skills-resume.pdf",
+                create_text_pdf("Jane Doe Product Support Specialist"),
+                PDF_MEDIA_TYPE,
+            ),
+        },
+    )
+    assert upload_response.status_code == 200
+
+    parse_response = client.post(
+        "/api/v1/cv/parse",
+        headers=headers,
+    )
+    assert parse_response.status_code == 200
+
+    skills_response = client.get("/api/v1/cv/skills")
+
+    assert skills_response.status_code == 200
+    assert skills_response.json() == {
+        "user_id": user_id,
+        "skills": [],
+        "skill_count": 0,
+        "extraction_version": "taxonomy-v1",
+    }
+
+
+def test_reupload_resets_extracted_skills(
+    client: TestClient,
+    created_emails: list[str],
+) -> None:
+    email = f"skills-reset-{uuid4()}@example.com"
+    created_emails.append(email)
+
+    register_and_login(client, email)
+    headers = csrf_headers(client)
+
+    first_upload_response = client.post(
+        "/api/v1/cv",
+        headers=headers,
+        files={
+            "file": (
+                "first-skills.pdf",
+                create_text_pdf("Python FastAPI Developer"),
+                PDF_MEDIA_TYPE,
+            ),
+        },
+    )
+    assert first_upload_response.status_code == 200
+
+    first_parse_response = client.post(
+        "/api/v1/cv/parse",
+        headers=headers,
+    )
+    assert first_parse_response.status_code == 200
+
+    first_skills_response = client.get("/api/v1/cv/skills")
+    assert first_skills_response.status_code == 200
+    assert first_skills_response.json()["skills"] == [
+        "Python",
+        "FastAPI",
+    ]
+
+    second_upload_response = client.post(
+        "/api/v1/cv",
+        headers=headers,
+        files={
+            "file": (
+                "second-skills.pdf",
+                create_text_pdf("Java Spring Boot Docker Engineer"),
+                PDF_MEDIA_TYPE,
+            ),
+        },
+    )
+    assert second_upload_response.status_code == 200
+    assert second_upload_response.json()["parse_status"] == "pending"
+
+    reset_response = client.get("/api/v1/cv/skills")
+    assert reset_response.status_code == 409
+
+    second_parse_response = client.post(
+        "/api/v1/cv/parse",
+        headers=headers,
+    )
+    assert second_parse_response.status_code == 200
+
+    second_skills_response = client.get("/api/v1/cv/skills")
+
+    assert second_skills_response.status_code == 200
+    assert second_skills_response.json()["skills"] == [
+        "Java",
+        "Spring Boot",
+        "Docker",
+    ]
+    assert second_skills_response.json()["skill_count"] == 3

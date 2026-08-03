@@ -6,6 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.cv_document import CVDocument
 from app.repositories.cv_document import CVDocumentRepository
 from app.security.cv_validation import ValidatedCV
+from app.services.cv_skill_extractor import (
+    SKILL_EXTRACTION_VERSION,
+    extract_skills,
+)
 from app.services.cv_text_extractor import (
     CVTextExtractionError,
     extract_cv_text,
@@ -17,7 +21,7 @@ class CVDocumentNotFoundError(Exception):
 
 
 class CVDocumentNotProcessedError(Exception):
-    """Raised when extracted CV text is unavailable."""
+    """Raised when extracted CV data is unavailable."""
 
 
 class CVDocumentParsingError(Exception):
@@ -59,6 +63,22 @@ class CVDocumentService:
 
         return document.extracted_text
 
+    async def get_extracted_skills(
+        self,
+        user_id: UUID,
+    ) -> tuple[list[str], str]:
+        document = await self.documents.get_with_extracted_skills(user_id)
+
+        if document is None:
+            raise CVDocumentNotFoundError
+
+        extraction_version = document.skills_extraction_version
+
+        if document.parse_status != "processed" or extraction_version is None:
+            raise CVDocumentNotProcessedError
+
+        return list(document.extracted_skills), extraction_version
+
     async def save_document(
         self,
         user_id: UUID,
@@ -72,6 +92,8 @@ class CVDocumentService:
             "file_data": validated_cv.file_data,
             "parse_status": "pending",
             "extracted_text": None,
+            "extracted_skills": [],
+            "skills_extraction_version": None,
         }
 
         document = await self.documents.get_by_user_id(user_id)
@@ -104,11 +126,16 @@ class CVDocumentService:
         except CVTextExtractionError as error:
             document.parse_status = "failed"
             document.extracted_text = None
+            document.extracted_skills = []
+            document.skills_extraction_version = None
+
             await self.database.commit()
 
             raise CVDocumentParsingError(str(error)) from error
 
         document.extracted_text = extracted_text
+        document.extracted_skills = extract_skills(extracted_text)
+        document.skills_extraction_version = SKILL_EXTRACTION_VERSION
         document.parse_status = "processed"
 
         await self.database.commit()

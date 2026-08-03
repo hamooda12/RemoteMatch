@@ -28,3 +28,10 @@ class CVTextResponse(BaseModel):
     parse_status: CVParseStatus
     extracted_text: str
     character_count: int
+
+
+class CVSkillsResponse(BaseModel):
+    user_id: UUID
+    skills: list[str]
+    skill_count: int
+    extraction_version: str

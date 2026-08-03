@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.cv import CVDocumentResponse, CVTextResponse
+from app.schemas.cv import (
+    CVDocumentResponse,
+    CVSkillsResponse,
+    CVTextResponse,
+)
 from app.security.authentication import get_current_user
 from app.security.csrf import verify_csrf_token
 from app.security.cv_validation import (
@@ -119,6 +123,37 @@ async def get_cv_text(
     )
 
 
+@router.get("/skills", response_model=CVSkillsResponse)
+async def get_cv_skills(
+    response: Response,
+    current_user: CurrentUser,
+    database: DatabaseSession,
+) -> CVSkillsResponse:
+    try:
+        skills, extraction_version = await CVDocumentService(database).get_extracted_skills(
+            current_user.id
+        )
+    except CVDocumentNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="CV not found.",
+        ) from error
+    except CVDocumentNotProcessedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="CV skills are not available.",
+        ) from error
+
+    response.headers["Cache-Control"] = "private, no-store"
+
+    return CVSkillsResponse(
+        user_id=current_user.id,
+        skills=skills,
+        skill_count=len(skills),
+        extraction_version=extraction_version,
+    )
+
+
 @router.post("/parse", response_model=CVTextResponse)
 async def parse_cv(
     response: Response,
@@ -164,7 +199,7 @@ async def upload_cv(
         )
     except CVTooLargeError as error:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status.HTTP_413_CONTENT_TOO_LARGE,
             detail=str(error),
         ) from error
     except UnsupportedCVTypeError as error:
