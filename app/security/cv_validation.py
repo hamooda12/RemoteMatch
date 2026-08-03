@@ -15,6 +15,14 @@ class InvalidCVError(ValueError):
     """Raised when an uploaded CV is unsafe or unsupported."""
 
 
+class CVTooLargeError(InvalidCVError):
+    """Raised when an uploaded CV exceeds the size limit."""
+
+
+class UnsupportedCVTypeError(InvalidCVError):
+    """Raised when a CV has an unsupported extension."""
+
+
 @dataclass(frozen=True, slots=True)
 class ValidatedCV:
     original_filename: str
@@ -34,7 +42,7 @@ def validate_cv_data(
         raise InvalidCVError("The uploaded CV is empty.")
 
     if len(file_data) > MAX_CV_SIZE:
-        raise InvalidCVError("The CV cannot exceed 5 MiB.")
+        raise CVTooLargeError("The CV cannot exceed 5 MiB.")
 
     extension = clean_filename.rsplit(".", maxsplit=1)[-1].lower()
 
@@ -45,7 +53,7 @@ def validate_cv_data(
         _validate_docx(file_data)
         media_type = DOCX_MEDIA_TYPE
     else:
-        raise InvalidCVError("Only PDF and DOCX files are supported.")
+        raise UnsupportedCVTypeError("Only PDF and DOCX files are supported.")
 
     return ValidatedCV(
         original_filename=clean_filename,
