@@ -9,3 +9,5 @@ pwdlib[argon2]
 email-validator
 itsdangerous
 python-multipart
+pypdf
+python-docx
