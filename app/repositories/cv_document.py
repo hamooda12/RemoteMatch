@@ -28,6 +28,17 @@ class CVDocumentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_with_extracted_text(
+        self,
+        user_id: UUID,
+    ) -> CVDocument | None:
+        result = await self.database.execute(
+            select(CVDocument)
+            .options(undefer(CVDocument.extracted_text))
+            .where(CVDocument.user_id == user_id)
+        )
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         *,

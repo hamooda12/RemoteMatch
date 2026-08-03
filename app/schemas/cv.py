@@ -21,3 +21,10 @@ class CVDocumentResponse(BaseModel):
     parse_status: CVParseStatus
     created_at: datetime
     updated_at: datetime
+
+
+class CVTextResponse(BaseModel):
+    user_id: UUID
+    parse_status: CVParseStatus
+    extracted_text: str
+    character_count: int

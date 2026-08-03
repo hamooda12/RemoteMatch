@@ -70,8 +70,8 @@ jobs:
       - name: Run SAST scan
         run: python -m bandit -r app -c pyproject.toml
 
-      - name: Audit dependencies
-        run: python -m pip_audit -r requirements.txt
+      - name: Audit installed dependencies
+        run: python -m pip_audit --local
 
   secrets:
     name: Secret scanning

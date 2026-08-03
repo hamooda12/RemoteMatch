@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.cv import CVDocumentResponse
+from app.schemas.cv import CVDocumentResponse, CVTextResponse
 from app.security.authentication import get_current_user
 from app.security.csrf import verify_csrf_token
 from app.security.cv_validation import (
@@ -26,6 +26,8 @@ from app.security.cv_validation import (
 )
 from app.services.cv_document import (
     CVDocumentNotFoundError,
+    CVDocumentNotProcessedError,
+    CVDocumentParsingError,
     CVDocumentService,
 )
 
@@ -85,6 +87,65 @@ async def download_cv(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
+    )
+
+
+@router.get("/text", response_model=CVTextResponse)
+async def get_cv_text(
+    response: Response,
+    current_user: CurrentUser,
+    database: DatabaseSession,
+) -> CVTextResponse:
+    try:
+        extracted_text = await CVDocumentService(database).get_extracted_text(current_user.id)
+    except CVDocumentNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="CV not found.",
+        ) from error
+    except CVDocumentNotProcessedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="CV text is not available.",
+        ) from error
+
+    response.headers["Cache-Control"] = "private, no-store"
+
+    return CVTextResponse(
+        user_id=current_user.id,
+        parse_status="processed",
+        extracted_text=extracted_text,
+        character_count=len(extracted_text),
+    )
+
+
+@router.post("/parse", response_model=CVTextResponse)
+async def parse_cv(
+    response: Response,
+    current_user: CurrentUser,
+    database: DatabaseSession,
+    _csrf: CsrfProtection,
+) -> CVTextResponse:
+    try:
+        extracted_text = await CVDocumentService(database).parse_document(current_user.id)
+    except CVDocumentNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="CV not found.",
+        ) from error
+    except CVDocumentParsingError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+    response.headers["Cache-Control"] = "private, no-store"
+
+    return CVTextResponse(
+        user_id=current_user.id,
+        parse_status="processed",
+        extracted_text=extracted_text,
+        character_count=len(extracted_text),
     )
 
 

@@ -73,6 +73,7 @@ class CVDocument(Base):
     extracted_text: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
+        deferred=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
