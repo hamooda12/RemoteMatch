@@ -2244,3 +2244,125 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+.jobs-filter-form {
+  margin-top: 35px;
+}
+
+.jobs-filter-form .job-search {
+  margin-top: 0;
+}
+
+.advanced-filters {
+  margin-top: 12px;
+  padding: 20px;
+  border: 1px solid #dce3eb;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.filter-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.filter-heading > span,
+.filter-heading button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.filter-heading > span {
+  color: #405069;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.filter-heading button {
+  color: #6f7b8d;
+  border: 0;
+  cursor: pointer;
+  background: transparent;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.filter-heading button:hover {
+  color: #0f766e;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 17px;
+}
+
+.filter-submit {
+  margin-top: 20px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 28px;
+}
+
+.pagination button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  color: #405069;
+  border: 1px solid #d4dce6;
+  border-radius: 9px;
+  cursor: pointer;
+  background: #ffffff;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.pagination button:hover:not(:disabled) {
+  color: #0f766e;
+  border-color: #85c9c1;
+}
+
+.pagination button:disabled {
+  opacity: 0.45;
+}
+
+.pagination > span {
+  color: #718095;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-submit {
+    width: 100%;
+  }
+
+  .pagination {
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .pagination button {
+    padding-inline: 10px;
+  }
+}

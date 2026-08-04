@@ -32,6 +32,12 @@ export type JobListResponse = {
 
 export type JobListParameters = {
   search?: string;
+  skills?: string[];
+  remoteRegions?: string[];
+  employmentType?: string;
+  experienceLevel?: string;
+  minimumSalary?: number;
+  salaryCurrency?: string;
   limit?: number;
   offset?: number;
 };

@@ -13,6 +13,42 @@ export async function getJobs(
     query.set("search", parameters.search);
   }
 
+  parameters.skills?.forEach((skill) => {
+    query.append("skills", skill);
+  });
+
+  parameters.remoteRegions?.forEach((region) => {
+    query.append("remote_regions", region);
+  });
+
+  if (parameters.employmentType) {
+    query.set(
+      "employment_type",
+      parameters.employmentType,
+    );
+  }
+
+  if (parameters.experienceLevel) {
+    query.set(
+      "experience_level",
+      parameters.experienceLevel,
+    );
+  }
+
+  if (parameters.minimumSalary !== undefined) {
+    query.set(
+      "minimum_salary",
+      String(parameters.minimumSalary),
+    );
+  }
+
+  if (parameters.salaryCurrency) {
+    query.set(
+      "salary_currency",
+      parameters.salaryCurrency,
+    );
+  }
+
   query.set("limit", String(parameters.limit ?? 20));
   query.set("offset", String(parameters.offset ?? 0));
 
