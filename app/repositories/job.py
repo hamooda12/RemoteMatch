@@ -143,6 +143,21 @@ class JobRepository:
 
         return list(jobs_result.all()), int(total or 0)
 
+    async def list_active_for_matching(self) -> list[Job]:
+        result = await self.database.scalars(
+            select(Job)
+            .where(
+                Job.is_active.is_(True),
+            )
+            .order_by(
+                Job.published_at.desc().nullslast(),
+                Job.first_seen_at.desc(),
+                Job.id.desc(),
+            )
+        )
+
+        return list(result.all())
+
     async def create(
         self,
         values: dict[str, object],
