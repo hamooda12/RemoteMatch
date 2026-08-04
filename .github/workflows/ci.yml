@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Tests and security
+  backend:
+    name: Backend tests and security
     runs-on: ubuntu-latest
 
     services:
@@ -20,7 +20,6 @@ jobs:
           POSTGRES_DB: remotematch_test
           POSTGRES_USER: remotematch
           POSTGRES_PASSWORD: remotematch_test
-          
         ports:
           - 5432:5432
         options: >-
@@ -34,6 +33,7 @@ jobs:
       DEBUG: false
       DATABASE_URL: postgresql+psycopg://remotematch:remotematch_test@localhost:5432/remotematch_test
       SESSION_SECRET: test-session-key-with-at-least-32-characters
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -72,6 +72,43 @@ jobs:
 
       - name: Audit installed dependencies
         run: python -m pip_audit --local
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Check frontend code
+        run: npm run lint
+
+      - name: Check frontend types
+        run: npm run typecheck
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Audit frontend dependencies
+        run: npm audit
 
   secrets:
     name: Secret scanning
