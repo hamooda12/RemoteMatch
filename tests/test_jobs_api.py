@@ -64,6 +64,9 @@ def job_context(
     frontend_job_id = uuid4()
     inactive_job_id = uuid4()
 
+    marker_id = uuid4()
+    marker = marker_id.hex
+
     job_ids = [
         python_job_id,
         frontend_job_id,
@@ -80,13 +83,13 @@ def job_context(
                 id=python_job_id,
                 source_name="test-source",
                 source_job_id=f"python-{uuid4()}",
-                deduplication_key=create_deduplication_key(str(python_job_id)),
+                deduplication_key=(create_deduplication_key(str(python_job_id))),
                 source_url=(f"https://jobs.example.com/{python_job_id}"),
                 application_url=(f"https://apply.example.com/{python_job_id}"),
                 title="Python Backend Engineer",
-                company_name="Acme Remote",
+                company_name=f"Acme Remote {marker}",
                 description=("Build secure remote APIs using Python and FastAPI."),
-                requirements="Python, FastAPI, and PostgreSQL",
+                requirements=("Python, FastAPI, and PostgreSQL"),
                 location="Remote",
                 remote_regions=["Worldwide"],
                 employment_type="full_time",
@@ -94,20 +97,24 @@ def job_context(
                 salary_min=Decimal("50000.00"),
                 salary_max=Decimal("70000.00"),
                 salary_currency="USD",
-                skills=["Python", "FastAPI", "PostgreSQL"],
+                skills=[
+                    "Python",
+                    "FastAPI",
+                    "PostgreSQL",
+                ],
                 is_remote=True,
                 is_active=True,
-                published_at=current_time - timedelta(hours=1),
+                published_at=(current_time - timedelta(hours=1)),
             ),
             Job(
                 id=frontend_job_id,
                 source_name="test-source",
                 source_job_id=f"frontend-{uuid4()}",
-                deduplication_key=create_deduplication_key(str(frontend_job_id)),
+                deduplication_key=(create_deduplication_key(str(frontend_job_id))),
                 source_url=(f"https://jobs.example.com/{frontend_job_id}"),
                 application_url=None,
                 title="Frontend Developer",
-                company_name="Bright Interfaces",
+                company_name=(f"Bright Interfaces {marker}"),
                 description=("Create accessible interfaces with React."),
                 requirements="React and TypeScript",
                 location="Europe",
@@ -117,21 +124,24 @@ def job_context(
                 salary_min=Decimal("60000.00"),
                 salary_max=Decimal("80000.00"),
                 salary_currency="EUR",
-                skills=["React", "TypeScript"],
+                skills=[
+                    "React",
+                    "TypeScript",
+                ],
                 is_remote=True,
                 is_active=True,
-                published_at=current_time - timedelta(hours=2),
+                published_at=(current_time - timedelta(hours=2)),
             ),
             Job(
                 id=inactive_job_id,
                 source_name="test-source",
                 source_job_id=f"inactive-{uuid4()}",
-                deduplication_key=create_deduplication_key(str(inactive_job_id)),
+                deduplication_key=(create_deduplication_key(str(inactive_job_id))),
                 source_url=(f"https://jobs.example.com/{inactive_job_id}"),
                 application_url=None,
                 title="Inactive Python Job",
-                company_name="Closed Company",
-                description="This job is no longer active.",
+                company_name=f"Closed Company {marker}",
+                description=("This job is no longer active."),
                 requirements=None,
                 location="Remote",
                 remote_regions=["Worldwide"],
@@ -155,6 +165,7 @@ def job_context(
             "python": python_job_id,
             "frontend": frontend_job_id,
             "inactive": inactive_job_id,
+            "marker": marker_id,
         }
     finally:
         client.cookies.clear()
@@ -181,7 +192,12 @@ def test_list_jobs_hides_inactive_jobs(
     client: TestClient,
     job_context: dict[str, UUID],
 ) -> None:
-    response = client.get("/api/v1/jobs")
+    response = client.get(
+        "/api/v1/jobs",
+        params={
+            "search": job_context["marker"].hex,
+        },
+    )
 
     assert response.status_code == 200
     assert response.json()["total"] == 2
@@ -231,26 +247,38 @@ def test_job_search_and_filters(
     client: TestClient,
     job_context: dict[str, UUID],
 ) -> None:
+    marker = job_context["marker"].hex
+
     search_response = client.get(
         "/api/v1/jobs",
-        params={"search": "Acme"},
+        params={
+            "search": marker,
+        },
     )
+
     assert search_response.status_code == 200
-    assert search_response.json()["total"] == 1
-    assert search_response.json()["items"][0]["id"] == str(job_context["python"])
+    assert search_response.json()["total"] == 2
 
     skills_response = client.get(
         "/api/v1/jobs",
-        params={"skills": "React"},
+        params={
+            "search": marker,
+            "skills": "React",
+        },
     )
+
     assert skills_response.status_code == 200
     assert skills_response.json()["total"] == 1
     assert skills_response.json()["items"][0]["id"] == str(job_context["frontend"])
 
     region_response = client.get(
         "/api/v1/jobs",
-        params={"remote_regions": "Worldwide"},
+        params={
+            "search": marker,
+            "remote_regions": "Worldwide",
+        },
     )
+
     assert region_response.status_code == 200
     assert region_response.json()["total"] == 1
     assert region_response.json()["items"][0]["id"] == str(job_context["python"])
@@ -258,21 +286,29 @@ def test_job_search_and_filters(
     experience_response = client.get(
         "/api/v1/jobs",
         params={
+            "search": marker,
             "employment_type": "full_time",
             "experience_level": "junior",
         },
     )
+
     assert experience_response.status_code == 200
     assert experience_response.json()["total"] == 1
+    assert experience_response.json()["items"][0]["id"] == str(job_context["python"])
 
 
 def test_job_salary_filter_requires_currency(
     client: TestClient,
     job_context: dict[str, UUID],
 ) -> None:
+    marker = job_context["marker"].hex
+
     missing_currency_response = client.get(
         "/api/v1/jobs",
-        params={"minimum_salary": "65000"},
+        params={
+            "search": marker,
+            "minimum_salary": "65000",
+        },
     )
 
     assert missing_currency_response.status_code == 422
@@ -283,6 +319,7 @@ def test_job_salary_filter_requires_currency(
     salary_response = client.get(
         "/api/v1/jobs",
         params={
+            "search": marker,
             "minimum_salary": "65000",
             "salary_currency": "usd",
         },
@@ -300,6 +337,7 @@ def test_job_pagination_preserves_total_count(
     response = client.get(
         "/api/v1/jobs",
         params={
+            "search": job_context["marker"].hex,
             "limit": 1,
             "offset": 1,
         },
