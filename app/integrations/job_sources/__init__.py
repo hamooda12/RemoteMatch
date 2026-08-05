@@ -7,6 +7,10 @@ from app.integrations.job_sources.base import (
     JobSourceError,
     JobSourceFetchResult,
 )
+from app.integrations.job_sources.greenhouse import (
+    GREENHOUSE_SOURCE_NAME,
+    GreenhouseJobSource,
+)
 from app.integrations.job_sources.himalayas import (
     HIMALAYAS_SOURCE_NAME,
     HimalayasJobSource,
@@ -24,6 +28,7 @@ from app.integrations.job_sources.remoteok import (
 def build_job_source_registry() -> dict[str, JobSource]:
     sources: tuple[JobSource, ...] = (
         ArbeitnowJobSource(),
+        GreenhouseJobSource(),
         HimalayasJobSource(),
         JobicyJobSource(),
         RemoteOKJobSource(),
@@ -38,10 +43,12 @@ def available_job_source_names() -> tuple[str, ...]:
 
 __all__ = [
     "ARBEITNOW_SOURCE_NAME",
+    "GREENHOUSE_SOURCE_NAME",
     "HIMALAYAS_SOURCE_NAME",
     "JOBICY_SOURCE_NAME",
     "REMOTEOK_SOURCE_NAME",
     "ArbeitnowJobSource",
+    "GreenhouseJobSource",
     "HimalayasJobSource",
     "JobSource",
     "JobSourceError",

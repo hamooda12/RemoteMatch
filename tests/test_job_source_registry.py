@@ -28,6 +28,7 @@ def test_registry_contains_configured_sources() -> None:
 
     assert tuple(registry) == (
         "arbeitnow",
+        "greenhouse",
         "himalayas",
         "jobicy",
         "remoteok",
