@@ -6,7 +6,14 @@ from dataclasses import asdict
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.db.session import AsyncSessionFactory, engine
+from app.db.session import (
+    AsyncSessionFactory,
+    engine,
+)
+from app.integrations.job_sources import (
+    ARBEITNOW_SOURCE_NAME,
+    available_job_source_names,
+)
 from app.services.job_sync import (
     JobSyncError,
     JobSyncService,
@@ -16,26 +23,48 @@ from app.services.job_sync import (
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=("Synchronize normalized remote jobs from approved sources.")
+        description="Synchronize remote jobs.",
     )
+
+    parser.add_argument(
+        "--source",
+        choices=(
+            *available_job_source_names(),
+            "all",
+        ),
+        default=ARBEITNOW_SOURCE_NAME,
+        help=(f"Job source to synchronize, or 'all'. Default: {ARBEITNOW_SOURCE_NAME}."),
+    )
+
     parser.add_argument(
         "--max-pages",
         type=int,
         default=1,
-        help=("Maximum Arbeitnow pages to fetch (1-5, default: 1)."),
+        help=("Maximum number of pages to fetch (default: 1)."),
     )
 
     return parser.parse_args()
 
 
 async def run_sync(
+    source_name: str,
     max_pages: int,
-) -> JobSyncSummary:
+) -> list[JobSyncSummary]:
     try:
         async with AsyncSessionFactory() as database:
-            return await JobSyncService(database).sync_arbeitnow(
+            service = JobSyncService(database)
+
+            if source_name == "all":
+                return await service.sync_all(
+                    max_pages=max_pages,
+                )
+
+            summary = await service.sync_source(
+                source_name,
                 max_pages=max_pages,
             )
+
+            return [summary]
     finally:
         await engine.dispose()
 
@@ -44,7 +73,12 @@ def main() -> int:
     arguments = parse_arguments()
 
     try:
-        summary = asyncio.run(run_sync(arguments.max_pages))
+        summaries = asyncio.run(
+            run_sync(
+                arguments.source,
+                arguments.max_pages,
+            )
+        )
     except ValueError as error:
         print(
             f"Invalid job sync configuration: {error}",
@@ -64,9 +98,14 @@ def main() -> int:
         )
         return 1
 
+    if arguments.source == "all":
+        output: object = [asdict(summary) for summary in summaries]
+    else:
+        output = asdict(summaries[0])
+
     print(
         json.dumps(
-            asdict(summary),
+            output,
             sort_keys=True,
         )
     )

@@ -1,12 +1,14 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.job_sources.arbeitnow import (
+from app.integrations.job_sources import (
     ARBEITNOW_SOURCE_NAME,
-    ArbeitnowJobSource,
-    ArbeitnowSourceError,
+    JobSource,
+    JobSourceError,
+    build_job_source_registry,
 )
 from app.services.job_ingestion import (
     JobIngestionAction,
@@ -16,7 +18,7 @@ from app.services.job_ingestion import (
 
 
 class JobSyncError(Exception):
-    """Raised when a job source synchronization fails."""
+    """Raised when a job-source synchronization fails."""
 
 
 @dataclass(slots=True)
@@ -37,31 +39,62 @@ class JobSyncService:
         self,
         database: AsyncSession,
         *,
-        arbeitnow_source: ArbeitnowJobSource | None = None,
+        sources: Mapping[str, JobSource] | None = None,
+        arbeitnow_source: JobSource | None = None,
     ) -> None:
+        if sources is not None and arbeitnow_source is not None:
+            raise ValueError("Provide either sources or arbeitnow_source, not both.")
+
+        if sources is not None:
+            self.sources = dict(sources)
+        else:
+            self.sources = build_job_source_registry()
+
+            if arbeitnow_source is not None:
+                self.sources[ARBEITNOW_SOURCE_NAME] = arbeitnow_source
+
         self.database = database
-        self.arbeitnow_source = arbeitnow_source or ArbeitnowJobSource()
         self.ingestion = JobIngestionService(database)
 
-    async def sync_arbeitnow(
+    async def sync_source(
         self,
+        source_name: str,
         *,
         max_pages: int = 1,
     ) -> JobSyncSummary:
-        if max_pages < 1 or max_pages > 5:
-            raise ValueError("max_pages must be between 1 and 5")
+        source = self.sources.get(source_name)
+
+        if source is None:
+            available_sources = ", ".join(sorted(self.sources))
+
+            raise ValueError(
+                f"Unknown job source '{source_name}'. Available sources: {available_sources}."
+            )
+
+        source_max_pages = getattr(
+            source,
+            "max_pages",
+            5,
+        )
+
+        if max_pages < 1 or max_pages > source_max_pages:
+            raise ValueError(
+                f"max_pages must be between 1 and {source_max_pages} for {source_name}"
+            )
 
         summary = JobSyncSummary(
-            source_name=ARBEITNOW_SOURCE_NAME,
+            source_name=source_name,
         )
         observed_at = datetime.now(UTC)
-        page = 1
 
-        while page <= max_pages:
+        for page in range(
+            1,
+            max_pages + 1,
+        ):
             try:
-                fetch_result = await self.arbeitnow_source.fetch_page(page=page)
-            except ArbeitnowSourceError as error:
-                raise JobSyncError(f"Unable to synchronize Arbeitnow page {page}.") from error
+                fetch_result = await source.fetch_page(page=page)
+            except JobSourceError as error:
+                raise JobSyncError(f"Unable to synchronize {source_name} page {page}.") from error
 
             summary.pages_fetched += 1
             summary.fetched_records += len(fetch_result.records)
@@ -85,9 +118,34 @@ class JobSyncService:
                 else:
                     summary.duplicates += 1
 
-            if not fetch_result.has_next_page or page >= max_pages:
+            if not fetch_result.has_next_page:
                 break
 
-            page += 1
-
         return summary
+
+    async def sync_all(
+        self,
+        *,
+        max_pages: int = 1,
+    ) -> list[JobSyncSummary]:
+        summaries: list[JobSyncSummary] = []
+
+        for source_name in self.sources:
+            summary = await self.sync_source(
+                source_name,
+                max_pages=max_pages,
+            )
+            summaries.append(summary)
+
+        return summaries
+
+    async def sync_arbeitnow(
+        self,
+        *,
+        max_pages: int = 1,
+    ) -> JobSyncSummary:
+        """Synchronize Arbeitnow for compatibility."""
+        return await self.sync_source(
+            ARBEITNOW_SOURCE_NAME,
+            max_pages=max_pages,
+        )
