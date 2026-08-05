@@ -6,6 +6,7 @@ import pytest
 from app.integrations.job_sources import (
     ARBEITNOW_SOURCE_NAME,
     HIMALAYAS_SOURCE_NAME,
+    JOBICY_SOURCE_NAME,
     JobSourceError,
     JobSourceFetchResult,
     available_job_source_names,
@@ -32,6 +33,7 @@ def test_registry_contains_configured_sources() -> None:
     expected_sources = (
         ARBEITNOW_SOURCE_NAME,
         HIMALAYAS_SOURCE_NAME,
+        JOBICY_SOURCE_NAME,
     )
 
     assert tuple(registry) == expected_sources
@@ -39,12 +41,16 @@ def test_registry_contains_configured_sources() -> None:
 
     arbeitnow = registry[ARBEITNOW_SOURCE_NAME]
     himalayas = registry[HIMALAYAS_SOURCE_NAME]
+    jobicy = registry[JOBICY_SOURCE_NAME]
 
     assert arbeitnow.name == (ARBEITNOW_SOURCE_NAME)
     assert arbeitnow.max_pages == 5
 
     assert himalayas.name == (HIMALAYAS_SOURCE_NAME)
     assert himalayas.max_pages == 5
+
+    assert jobicy.name == JOBICY_SOURCE_NAME
+    assert jobicy.max_pages == 1
 
 
 @pytest.mark.anyio
@@ -123,6 +129,67 @@ async def test_sync_all_processes_every_source() -> None:
 
     first_source.fetch_page.assert_awaited_once_with(page=1)
     second_source.fetch_page.assert_awaited_once_with(page=1)
+
+
+@pytest.mark.anyio
+async def test_sync_all_respects_each_source_page_limit() -> None:
+    paginated_source = SimpleNamespace(
+        name="paginated",
+        max_pages=3,
+        fetch_page=AsyncMock(
+            side_effect=[
+                JobSourceFetchResult(
+                    records=(),
+                    page=1,
+                    has_next_page=True,
+                ),
+                JobSourceFetchResult(
+                    records=(),
+                    page=2,
+                    has_next_page=True,
+                ),
+                JobSourceFetchResult(
+                    records=(),
+                    page=3,
+                    has_next_page=True,
+                ),
+            ]
+        ),
+    )
+
+    single_page_source = SimpleNamespace(
+        name="single-page",
+        max_pages=1,
+        fetch_page=AsyncMock(
+            return_value=JobSourceFetchResult(
+                records=(),
+                page=1,
+                has_next_page=True,
+            )
+        ),
+    )
+
+    service = JobSyncService(
+        Mock(),
+        sources={
+            paginated_source.name: (paginated_source),
+            single_page_source.name: (single_page_source),
+        },
+    )
+
+    summaries = await service.sync_all(max_pages=3)
+
+    assert [summary.source_name for summary in summaries] == [
+        "paginated",
+        "single-page",
+    ]
+
+    assert paginated_source.fetch_page.await_args_list == [
+        call(page=1),
+        call(page=2),
+        call(page=3),
+    ]
+    single_page_source.fetch_page.assert_awaited_once_with(page=1)
 
 
 @pytest.mark.anyio

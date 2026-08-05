@@ -11,12 +11,17 @@ from app.integrations.job_sources.himalayas import (
     HIMALAYAS_SOURCE_NAME,
     HimalayasJobSource,
 )
+from app.integrations.job_sources.jobicy import (
+    JOBICY_SOURCE_NAME,
+    JobicyJobSource,
+)
 
 
 def build_job_source_registry() -> dict[str, JobSource]:
     sources: tuple[JobSource, ...] = (
         ArbeitnowJobSource(),
         HimalayasJobSource(),
+        JobicyJobSource(),
     )
 
     return {source.name: source for source in sources}
@@ -29,8 +34,10 @@ def available_job_source_names() -> tuple[str, ...]:
 __all__ = [
     "ARBEITNOW_SOURCE_NAME",
     "HIMALAYAS_SOURCE_NAME",
+    "JOBICY_SOURCE_NAME",
     "ArbeitnowJobSource",
     "HimalayasJobSource",
+    "JobicyJobSource",
     "JobSource",
     "JobSourceError",
     "JobSourceFetchResult",

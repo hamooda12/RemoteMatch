@@ -82,15 +82,10 @@ class JobSyncService:
                 f"max_pages must be between 1 and {source_max_pages} for {source_name}"
             )
 
-        summary = JobSyncSummary(
-            source_name=source_name,
-        )
+        summary = JobSyncSummary(source_name=source_name)
         observed_at = datetime.now(UTC)
 
-        for page in range(
-            1,
-            max_pages + 1,
-        ):
+        for page in range(1, max_pages + 1):
             try:
                 fetch_result = await source.fetch_page(page=page)
             except JobSourceError as error:
@@ -128,12 +123,25 @@ class JobSyncService:
         *,
         max_pages: int = 1,
     ) -> list[JobSyncSummary]:
+        if max_pages < 1:
+            raise ValueError("max_pages must be at least 1")
+
         summaries: list[JobSyncSummary] = []
 
-        for source_name in self.sources:
+        for source_name, source in self.sources.items():
+            source_max_pages = getattr(
+                source,
+                "max_pages",
+                max_pages,
+            )
+            pages_to_fetch = min(
+                max_pages,
+                source_max_pages,
+            )
+
             summary = await self.sync_source(
                 source_name,
-                max_pages=max_pages,
+                max_pages=pages_to_fetch,
             )
             summaries.append(summary)
 
