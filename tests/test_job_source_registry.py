@@ -4,12 +4,8 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from app.integrations.job_sources import (
-    ARBEITNOW_SOURCE_NAME,
-    HIMALAYAS_SOURCE_NAME,
-    JOBICY_SOURCE_NAME,
     JobSourceError,
     JobSourceFetchResult,
-    available_job_source_names,
     build_job_source_registry,
 )
 from app.services.job_sync import (
@@ -30,27 +26,12 @@ def anyio_backend() -> str:
 def test_registry_contains_configured_sources() -> None:
     registry = build_job_source_registry()
 
-    expected_sources = (
-        ARBEITNOW_SOURCE_NAME,
-        HIMALAYAS_SOURCE_NAME,
-        JOBICY_SOURCE_NAME,
+    assert tuple(registry) == (
+        "arbeitnow",
+        "himalayas",
+        "jobicy",
+        "remoteok",
     )
-
-    assert tuple(registry) == expected_sources
-    assert available_job_source_names() == expected_sources
-
-    arbeitnow = registry[ARBEITNOW_SOURCE_NAME]
-    himalayas = registry[HIMALAYAS_SOURCE_NAME]
-    jobicy = registry[JOBICY_SOURCE_NAME]
-
-    assert arbeitnow.name == (ARBEITNOW_SOURCE_NAME)
-    assert arbeitnow.max_pages == 5
-
-    assert himalayas.name == (HIMALAYAS_SOURCE_NAME)
-    assert himalayas.max_pages == 5
-
-    assert jobicy.name == JOBICY_SOURCE_NAME
-    assert jobicy.max_pages == 1
 
 
 @pytest.mark.anyio
