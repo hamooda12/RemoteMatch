@@ -3,24 +3,24 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class GreenhouseBoard:
-    token: str
+    slug: str
     company_name: str
     all_jobs_remote: bool = False
 
 
 GREENHOUSE_BOARDS: tuple[GreenhouseBoard, ...] = (
     GreenhouseBoard(
-        token="gitlab",
+        slug="gitlab",
         company_name="GitLab",
         all_jobs_remote=True,
     ),
     GreenhouseBoard(
-        token="remotecom",
+        slug="remotecom",
         company_name="Remote",
         all_jobs_remote=True,
     ),
     GreenhouseBoard(
-        token="stackexchange",
+        slug="stackexchange",
         company_name="Stack Overflow",
         all_jobs_remote=True,
     ),

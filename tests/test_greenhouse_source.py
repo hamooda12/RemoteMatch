@@ -91,12 +91,12 @@ def build_client(
 @pytest.mark.anyio
 async def test_fetch_page_maps_multiple_boards() -> None:
     first_board = GreenhouseBoard(
-        token="firstcompany",
+        slug="firstcompany",
         company_name="First Company",
         all_jobs_remote=True,
     )
     second_board = GreenhouseBoard(
-        token="secondcompany",
+        slug="secondcompany",
         company_name="Second Company",
         all_jobs_remote=True,
     )
@@ -169,7 +169,7 @@ async def test_fetch_page_maps_multiple_boards() -> None:
 @pytest.mark.anyio
 async def test_non_remote_jobs_are_skipped() -> None:
     board = GreenhouseBoard(
-        token="hybridcompany",
+        slug="hybridcompany",
         company_name="Hybrid Company",
         all_jobs_remote=False,
     )
@@ -219,7 +219,7 @@ async def test_non_remote_jobs_are_skipped() -> None:
 @pytest.mark.anyio
 async def test_all_remote_board_accepts_local_location() -> None:
     board = GreenhouseBoard(
-        token="remotecompany",
+        slug="remotecompany",
         company_name="Remote Company",
         all_jobs_remote=True,
     )
@@ -252,7 +252,7 @@ async def test_all_remote_board_accepts_local_location() -> None:
 @pytest.mark.anyio
 async def test_invalid_jobs_are_counted() -> None:
     board = GreenhouseBoard(
-        token="example",
+        slug="example",
         company_name="Example",
         all_jobs_remote=True,
     )
@@ -287,7 +287,7 @@ async def test_invalid_jobs_are_counted() -> None:
 @pytest.mark.anyio
 async def test_invalid_payload_is_rejected() -> None:
     board = GreenhouseBoard(
-        token="example",
+        slug="example",
         company_name="Example",
         all_jobs_remote=True,
     )
@@ -317,7 +317,7 @@ async def test_invalid_payload_is_rejected() -> None:
 @pytest.mark.anyio
 async def test_http_failure_is_wrapped() -> None:
     board = GreenhouseBoard(
-        token="example",
+        slug="example",
         company_name="Example",
         all_jobs_remote=True,
     )
@@ -350,7 +350,7 @@ async def test_oversized_response_is_rejected(
     )
 
     board = GreenhouseBoard(
-        token="example",
+        slug="example",
         company_name="Example",
         all_jobs_remote=True,
     )
@@ -386,7 +386,7 @@ async def test_unsupported_pages_are_rejected(
     page: int,
 ) -> None:
     board = GreenhouseBoard(
-        token="example",
+        slug="example",
         company_name="Example",
         all_jobs_remote=True,
     )

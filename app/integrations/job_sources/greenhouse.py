@@ -336,11 +336,11 @@ class GreenhouseJobSource:
     ) -> bytes:
         if not re.fullmatch(
             r"[a-zA-Z0-9][a-zA-Z0-9_-]*",
-            board.token,
+            board.slug,
         ):
-            raise GreenhouseSourceError("Invalid Greenhouse board token.")
+            raise GreenhouseSourceError("Invalid Greenhouse board slug.")
 
-        url = f"{GREENHOUSE_API_URL}/{board.token}/jobs"
+        url = f"{GREENHOUSE_API_URL}/{board.slug}/jobs"
 
         try:
             async with client.stream(
@@ -394,7 +394,7 @@ class GreenhouseJobSource:
 
         return JobIngestionRecord(
             source_name=GREENHOUSE_SOURCE_NAME,
-            source_job_id=(f"{board.token}:{job.id}"),
+            source_job_id=(f"{board.slug}:{job.id}"),
             source_url=job.absolute_url,
             application_url=job.absolute_url,
             title=job.title,
