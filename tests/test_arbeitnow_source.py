@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 
 import httpx
@@ -204,7 +205,14 @@ async def test_fetch_page_rejects_invalid_payload() -> None:
 
 
 @pytest.mark.anyio
-async def test_fetch_page_handles_http_failure() -> None:
+async def test_fetch_page_handles_http_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
     def handle_request(
         request: httpx.Request,
     ) -> httpx.Response:
@@ -223,6 +231,117 @@ async def test_fetch_page_handles_http_failure() -> None:
             match="Unable to fetch",
         ):
             await ArbeitnowJobSource(client).fetch_page()
+
+
+@pytest.mark.anyio
+async def test_fetch_page_retries_transient_failure_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    call_count = 0
+
+    def handle_request(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+
+        if call_count == 1:
+            return httpx.Response(
+                status_code=503,
+                json={"detail": "Unavailable"},
+            )
+
+        return httpx.Response(
+            status_code=200,
+            json=source_payload(
+                [valid_source_job(remote=True)],
+            ),
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handle_request),
+    ) as client:
+        result = await ArbeitnowJobSource(client).fetch_page()
+
+    assert call_count == 2
+    assert len(result.records) == 1
+    assert result.records[0].source_job_id == "junior-python-engineer-123"
+
+
+@pytest.mark.anyio
+async def test_fetch_page_does_not_retry_non_retryable_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+        raise AssertionError("sleep should not be called for a non-retryable failure")
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    call_count = 0
+
+    def handle_request(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+
+        return httpx.Response(
+            status_code=404,
+            json={"detail": "Not Found"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handle_request),
+    ) as client:
+        with pytest.raises(
+            ArbeitnowSourceError,
+            match="Unable to fetch",
+        ):
+            await ArbeitnowJobSource(client).fetch_page()
+
+    assert call_count == 1
+
+
+@pytest.mark.anyio
+async def test_fetch_page_raises_after_exhausting_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    call_count = 0
+
+    def handle_request(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+
+        return httpx.Response(
+            status_code=503,
+            json={"detail": "Unavailable"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handle_request),
+    ) as client:
+        with pytest.raises(
+            ArbeitnowSourceError,
+            match="Unable to fetch",
+        ) as error_info:
+            await ArbeitnowJobSource(client).fetch_page()
+
+    assert call_count == 3
+    assert isinstance(error_info.value.__cause__, httpx.HTTPStatusError)
+    assert error_info.value.__cause__.response.status_code == 503
 
 
 @pytest.mark.anyio

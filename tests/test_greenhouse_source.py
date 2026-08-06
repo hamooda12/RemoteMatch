@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Mapping
 
@@ -315,7 +316,14 @@ async def test_invalid_payload_is_rejected() -> None:
 
 
 @pytest.mark.anyio
-async def test_http_failure_is_wrapped() -> None:
+async def test_http_failure_is_wrapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
     board = GreenhouseBoard(
         slug="example",
         company_name="Example",
@@ -338,6 +346,152 @@ async def test_http_failure_is_wrapped() -> None:
                 client=client,
                 boards=(board,),
             ).fetch_page()
+
+
+@pytest.mark.anyio
+async def test_fetch_page_retries_transient_failure_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    flaky_board = GreenhouseBoard(
+        slug="flakycompany",
+        company_name="Flaky Company",
+        all_jobs_remote=True,
+    )
+    healthy_board = GreenhouseBoard(
+        slug="healthycompany",
+        company_name="Healthy Company",
+        all_jobs_remote=True,
+    )
+
+    call_counts = {
+        "flakycompany": 0,
+        "healthycompany": 0,
+    }
+
+    def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        board_token = request.url.path.split("/")[-2]
+        call_counts[board_token] += 1
+
+        if board_token == "flakycompany" and call_counts[board_token] == 1:
+            return httpx.Response(status_code=503, content=b"")
+
+        payload = encode_payload(
+            [
+                valid_greenhouse_job(
+                    job_id=(1 if board_token == "flakycompany" else 2),
+                ),
+            ]
+        )
+
+        return httpx.Response(
+            status_code=200,
+            content=payload,
+            headers={"Content-Type": "application/json"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = await GreenhouseJobSource(
+            client=client,
+            boards=(flaky_board, healthy_board),
+        ).fetch_page()
+
+    assert call_counts["flakycompany"] == 2
+    assert call_counts["healthycompany"] == 1
+    assert len(result.records) == 2
+
+
+@pytest.mark.anyio
+async def test_fetch_page_does_not_retry_non_retryable_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+        raise AssertionError("sleep should not be called for a non-retryable failure")
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    call_count = 0
+
+    def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        del request
+        nonlocal call_count
+        call_count += 1
+
+        return httpx.Response(status_code=404, content=b"")
+
+    board = GreenhouseBoard(
+        slug="example",
+        company_name="Example",
+        all_jobs_remote=True,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(
+            GreenhouseSourceError,
+            match="Unable to fetch",
+        ):
+            await GreenhouseJobSource(
+                client=client,
+                boards=(board,),
+            ).fetch_page()
+
+    assert call_count == 1
+
+
+@pytest.mark.anyio
+async def test_fetch_page_raises_after_exhausting_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    call_count = 0
+
+    def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        del request
+        nonlocal call_count
+        call_count += 1
+
+        return httpx.Response(status_code=503, content=b"")
+
+    board = GreenhouseBoard(
+        slug="example",
+        company_name="Example",
+        all_jobs_remote=True,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(
+            GreenhouseSourceError,
+            match="Unable to fetch",
+        ) as error_info:
+            await GreenhouseJobSource(
+                client=client,
+                boards=(board,),
+            ).fetch_page()
+
+    assert call_count == 3
+    assert isinstance(error_info.value.__cause__, httpx.HTTPStatusError)
+    assert error_info.value.__cause__.response.status_code == 503
 
 
 @pytest.mark.anyio

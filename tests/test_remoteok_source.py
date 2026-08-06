@@ -1,3 +1,4 @@
+import asyncio
 import json
 from decimal import Decimal
 
@@ -181,7 +182,14 @@ async def test_fetch_page_rejects_invalid_payload() -> None:
 
 
 @pytest.mark.anyio
-async def test_fetch_page_wraps_http_failure() -> None:
+async def test_fetch_page_wraps_http_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
     async with build_client(
         b"",
         status_code=503,
@@ -191,6 +199,43 @@ async def test_fetch_page_wraps_http_failure() -> None:
             match="Unable to fetch jobs",
         ):
             await RemoteOKJobSource(client).fetch_page()
+
+
+@pytest.mark.anyio
+async def test_fetch_page_retries_transient_failure_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    call_count = 0
+    payload = [valid_remoteok_job()]
+
+    def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:
+        del request
+        nonlocal call_count
+        call_count += 1
+
+        if call_count == 1:
+            return httpx.Response(status_code=503, content=b"")
+
+        return httpx.Response(
+            status_code=200,
+            content=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = await RemoteOKJobSource(client).fetch_page()
+
+    assert call_count == 2
+    assert len(result.records) == 1
 
 
 @pytest.mark.anyio

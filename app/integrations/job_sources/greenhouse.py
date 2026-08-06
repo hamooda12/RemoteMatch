@@ -22,6 +22,10 @@ from app.integrations.job_sources.greenhouse_boards import (
     GREENHOUSE_BOARDS,
     GreenhouseBoard,
 )
+from app.integrations.job_sources.retry import (
+    is_retryable_httpx_error,
+    retry_async,
+)
 from app.schemas.job_ingestion import JobIngestionRecord
 from app.services.cv_skill_extractor import extract_skills
 
@@ -342,7 +346,7 @@ class GreenhouseJobSource:
 
         url = f"{GREENHOUSE_API_URL}/{board.slug}/jobs"
 
-        try:
+        async def attempt() -> bytes:
             async with client.stream(
                 "GET",
                 url,
@@ -371,6 +375,9 @@ class GreenhouseJobSource:
                     chunks.append(chunk)
 
                 return b"".join(chunks)
+
+        try:
+            return await retry_async(attempt, is_retryable=is_retryable_httpx_error)
         except httpx.HTTPError as error:
             raise GreenhouseSourceError(
                 f"Unable to fetch the {board.company_name} Greenhouse board."

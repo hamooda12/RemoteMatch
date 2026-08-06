@@ -19,6 +19,10 @@ from app.integrations.job_sources.base import (
     JobSourceError,
     JobSourceFetchResult,
 )
+from app.integrations.job_sources.retry import (
+    is_retryable_httpx_error,
+    retry_async,
+)
 from app.schemas.job_ingestion import JobIngestionRecord
 from app.services.cv_skill_extractor import extract_skills
 
@@ -295,7 +299,7 @@ class RemoteOKJobSource:
         self,
         client: httpx.AsyncClient,
     ) -> bytes:
-        try:
+        async def attempt() -> bytes:
             async with client.stream(
                 "GET",
                 REMOTEOK_API_URL,
@@ -319,6 +323,9 @@ class RemoteOKJobSource:
                     chunks.append(chunk)
 
                 return b"".join(chunks)
+
+        try:
+            return await retry_async(attempt, is_retryable=is_retryable_httpx_error)
         except httpx.HTTPError as error:
             raise RemoteOKSourceError("Unable to fetch jobs from Remote OK.") from error
 
