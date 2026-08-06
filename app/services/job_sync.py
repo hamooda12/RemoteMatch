@@ -32,6 +32,7 @@ class JobSyncSummary:
     conflicts: int = 0
     rejected: int = 0
     skipped_non_remote: int = 0
+    error: str | None = None
 
 
 class JobSyncService:
@@ -139,10 +140,20 @@ class JobSyncService:
                 source_max_pages,
             )
 
-            summary = await self.sync_source(
-                source_name,
-                max_pages=pages_to_fetch,
-            )
+            try:
+                summary = await self.sync_source(
+                    source_name,
+                    max_pages=pages_to_fetch,
+                )
+            except JobSyncError as error:
+                summaries.append(
+                    JobSyncSummary(
+                        source_name=source_name,
+                        error=str(error),
+                    )
+                )
+                continue
+
             summaries.append(summary)
 
         return summaries

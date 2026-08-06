@@ -175,6 +175,110 @@ async def test_sync_all_respects_each_source_page_limit() -> None:
 
 
 @pytest.mark.anyio
+async def test_sync_all_continues_after_one_source_fails() -> None:
+    first_source = SimpleNamespace(
+        name="first",
+        max_pages=1,
+        fetch_page=AsyncMock(
+            return_value=JobSourceFetchResult(
+                records=(),
+                page=1,
+                has_next_page=False,
+            )
+        ),
+    )
+
+    second_source = SimpleNamespace(
+        name="second",
+        max_pages=1,
+        fetch_page=AsyncMock(side_effect=FakeSourceError("boom")),
+    )
+
+    third_source = SimpleNamespace(
+        name="third",
+        max_pages=1,
+        fetch_page=AsyncMock(
+            return_value=JobSourceFetchResult(
+                records=(),
+                page=1,
+                has_next_page=False,
+            )
+        ),
+    )
+
+    service = JobSyncService(
+        Mock(),
+        sources={
+            first_source.name: first_source,
+            second_source.name: second_source,
+            third_source.name: third_source,
+        },
+    )
+
+    summaries = await service.sync_all(max_pages=1)
+
+    assert [summary.source_name for summary in summaries] == [
+        "first",
+        "second",
+        "third",
+    ]
+
+    first_source.fetch_page.assert_awaited_once_with(page=1)
+    third_source.fetch_page.assert_awaited_once_with(page=1)
+
+    assert summaries[0].error is None
+    assert summaries[0].pages_fetched == 1
+
+    assert summaries[1].error is not None
+    assert "second" in summaries[1].error
+    assert "page 1" in summaries[1].error
+
+    assert summaries[2].error is None
+    assert summaries[2].pages_fetched == 1
+
+
+@pytest.mark.anyio
+async def test_sync_all_reports_multiple_failures_independently() -> None:
+    first_source = SimpleNamespace(
+        name="first",
+        max_pages=1,
+        fetch_page=AsyncMock(side_effect=FakeSourceError("first is down")),
+    )
+
+    second_source = SimpleNamespace(
+        name="second",
+        max_pages=1,
+        fetch_page=AsyncMock(side_effect=FakeSourceError("second is down")),
+    )
+
+    service = JobSyncService(
+        Mock(),
+        sources={
+            first_source.name: first_source,
+            second_source.name: second_source,
+        },
+    )
+
+    summaries = await service.sync_all(max_pages=1)
+
+    assert [summary.source_name for summary in summaries] == [
+        "first",
+        "second",
+    ]
+
+    first_source.fetch_page.assert_awaited_once_with(page=1)
+    second_source.fetch_page.assert_awaited_once_with(page=1)
+
+    assert summaries[0].error is not None
+    assert "first" in summaries[0].error
+
+    assert summaries[1].error is not None
+    assert "second" in summaries[1].error
+
+    assert summaries[0].error != summaries[1].error
+
+
+@pytest.mark.anyio
 async def test_sync_rejects_unknown_source() -> None:
     service = JobSyncService(
         Mock(),
