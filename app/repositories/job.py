@@ -25,19 +25,6 @@ class JobRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_source(
-        self,
-        source_name: str,
-        source_job_id: str,
-    ) -> Job | None:
-        result = await self.database.execute(
-            select(Job).where(
-                Job.source_name == source_name,
-                Job.source_job_id == source_job_id,
-            )
-        )
-        return result.scalar_one_or_none()
-
     async def get_by_deduplication_key(
         self,
         deduplication_key: str,

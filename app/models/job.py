@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
@@ -17,9 +18,12 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.job_source_reference import JobSourceReference
 
 
 class Job(Base):
@@ -76,6 +80,11 @@ class Job(Base):
         default=uuid.uuid4,
     )
 
+    # Legacy compatibility fields: retained only for existing API/query
+    # compatibility (see JobSummaryResponse). JobSourceReference is the
+    # authoritative source of identity/freshness per source; these three
+    # columns are no longer read for ingestion identity resolution and are
+    # only ever written by the source that originally created this row.
     source_name: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
@@ -199,4 +208,10 @@ class Job(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+
+    source_references: Mapped[list[JobSourceReference]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
