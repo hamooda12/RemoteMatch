@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       max_pages:
-        description: Number of Arbeitnow pages to synchronize
+        description: Number of pages to synchronize per source
         required: true
         default: "1"
         type: choice
@@ -28,7 +28,7 @@ jobs:
   synchronize:
     name: Synchronize remote jobs
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
 
     env:
       ENVIRONMENT: production
@@ -70,9 +70,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Synchronize Arbeitnow jobs
+      - name: Synchronize all job sources
         if: steps.configuration.outputs.ready == 'true'
         run: |
           python -m app.cli.sync_jobs \
-           --source arbeitnow \
+           --source all \
            --max-pages "${MAX_PAGES}"
