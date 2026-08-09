@@ -1,5 +1,7 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
+from uuid import uuid4
 
 import pytest
 
@@ -8,6 +10,8 @@ from app.integrations.job_sources import (
     JobSourceFetchResult,
     build_job_source_registry,
 )
+from app.models.job_sync_run import JobSyncRun, JobSyncRunSource
+from app.repositories.job_sync_run import JobSyncRunRepository
 from app.services.job_sync import (
     JobSyncError,
     JobSyncService,
@@ -16,6 +20,44 @@ from app.services.job_sync import (
 
 class FakeSourceError(JobSourceError):
     """Raised by a fake job source during tests."""
+
+
+def fake_database() -> Mock:
+    database = Mock()
+    database.commit = AsyncMock()
+    return database
+
+
+def fake_job_sync_run_repository() -> Mock:
+    repository = Mock()
+    repository.create_run = AsyncMock(
+        side_effect=lambda: JobSyncRun(
+            id=uuid4(),
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+    )
+    repository.create_run_source = AsyncMock(
+        side_effect=lambda run_id, source_name: JobSyncRunSource(
+            id=uuid4(),
+            run_id=run_id,
+            source_name=source_name,
+            status="running",
+            started_at=datetime.now(UTC),
+            pages_fetched=0,
+            fetched_records=0,
+            created=0,
+            updated=0,
+            duplicates=0,
+            conflicts=0,
+            rejected=0,
+            skipped_non_remote=0,
+        )
+    )
+    repository.complete_run_source = JobSyncRunRepository.complete_run_source
+    repository.complete_run = JobSyncRunRepository.complete_run
+
+    return repository
 
 
 @pytest.fixture
@@ -50,10 +92,11 @@ async def test_syncs_generic_source_by_name() -> None:
     )
 
     service = JobSyncService(
-        Mock(),
+        fake_database(),
         sources={
             source.name: source,
         },
+        runs=fake_job_sync_run_repository(),
     )
 
     summary = await service.sync_source(
@@ -94,12 +137,14 @@ async def test_sync_all_processes_every_source() -> None:
         ),
     )
 
+    runs = fake_job_sync_run_repository()
     service = JobSyncService(
-        Mock(),
+        fake_database(),
         sources={
             first_source.name: first_source,
             second_source.name: second_source,
         },
+        runs=runs,
     )
 
     summaries = await service.sync_all(max_pages=1)
@@ -111,6 +156,8 @@ async def test_sync_all_processes_every_source() -> None:
 
     first_source.fetch_page.assert_awaited_once_with(page=1)
     second_source.fetch_page.assert_awaited_once_with(page=1)
+
+    assert runs.create_run.await_count == 1
 
 
 @pytest.mark.anyio
@@ -152,11 +199,12 @@ async def test_sync_all_respects_each_source_page_limit() -> None:
     )
 
     service = JobSyncService(
-        Mock(),
+        fake_database(),
         sources={
             paginated_source.name: (paginated_source),
             single_page_source.name: (single_page_source),
         },
+        runs=fake_job_sync_run_repository(),
     )
 
     summaries = await service.sync_all(max_pages=3)
@@ -206,13 +254,15 @@ async def test_sync_all_continues_after_one_source_fails() -> None:
         ),
     )
 
+    runs = fake_job_sync_run_repository()
     service = JobSyncService(
-        Mock(),
+        fake_database(),
         sources={
             first_source.name: first_source,
             second_source.name: second_source,
             third_source.name: third_source,
         },
+        runs=runs,
     )
 
     summaries = await service.sync_all(max_pages=1)
@@ -236,6 +286,8 @@ async def test_sync_all_continues_after_one_source_fails() -> None:
     assert summaries[2].error is None
     assert summaries[2].pages_fetched == 1
 
+    assert runs.create_run.await_count == 1
+
 
 @pytest.mark.anyio
 async def test_sync_all_reports_multiple_failures_independently() -> None:
@@ -252,11 +304,12 @@ async def test_sync_all_reports_multiple_failures_independently() -> None:
     )
 
     service = JobSyncService(
-        Mock(),
+        fake_database(),
         sources={
             first_source.name: first_source,
             second_source.name: second_source,
         },
+        runs=fake_job_sync_run_repository(),
     )
 
     summaries = await service.sync_all(max_pages=1)
@@ -281,8 +334,9 @@ async def test_sync_all_reports_multiple_failures_independently() -> None:
 @pytest.mark.anyio
 async def test_sync_rejects_unknown_source() -> None:
     service = JobSyncService(
-        Mock(),
+        fake_database(),
         sources={},
+        runs=fake_job_sync_run_repository(),
     )
 
     with pytest.raises(
@@ -304,10 +358,11 @@ async def test_generic_source_failure_is_wrapped() -> None:
     )
 
     service = JobSyncService(
-        Mock(),
+        fake_database(),
         sources={
             source.name: source,
         },
+        runs=fake_job_sync_run_repository(),
     )
 
     with pytest.raises(

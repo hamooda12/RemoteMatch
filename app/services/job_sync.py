@@ -10,11 +10,14 @@ from app.integrations.job_sources import (
     JobSourceError,
     build_job_source_registry,
 )
+from app.repositories.job_sync_run import JobSyncRunRepository
 from app.services.job_ingestion import (
     JobIngestionAction,
     JobIngestionConflictError,
     JobIngestionService,
 )
+
+_SOURCE_SYNC_FAILED_ERROR_CODE = "SOURCE_SYNC_FAILED"
 
 
 class JobSyncError(Exception):
@@ -42,6 +45,7 @@ class JobSyncService:
         *,
         sources: Mapping[str, JobSource] | None = None,
         arbeitnow_source: JobSource | None = None,
+        runs: JobSyncRunRepository | None = None,
     ) -> None:
         if sources is not None and arbeitnow_source is not None:
             raise ValueError("Provide either sources or arbeitnow_source, not both.")
@@ -56,6 +60,7 @@ class JobSyncService:
 
         self.database = database
         self.ingestion = JobIngestionService(database)
+        self.runs = runs if runs is not None else JobSyncRunRepository(database)
 
     async def sync_source(
         self,
@@ -83,6 +88,178 @@ class JobSyncService:
                 f"max_pages must be between 1 and {source_max_pages} for {source_name}"
             )
 
+        run = await self.runs.create_run()
+        await self.database.commit()
+        run_id = run.id
+
+        run_source = await self.runs.create_run_source(
+            run_id,
+            source_name,
+        )
+        await self.database.commit()
+
+        try:
+            summary = await self._fetch_and_ingest_source(
+                source,
+                source_name,
+                max_pages,
+            )
+        except JobSyncError as error:
+            completed_at = datetime.now(UTC)
+
+            self.runs.complete_run_source(
+                run_source,
+                status="failed",
+                completed_at=completed_at,
+                error_code=_SOURCE_SYNC_FAILED_ERROR_CODE,
+                error_message=str(error),
+            )
+            await self.database.commit()
+
+            self.runs.complete_run(
+                run,
+                status="failed",
+                completed_at=completed_at,
+            )
+            await self.database.commit()
+
+            raise
+
+        completed_at = datetime.now(UTC)
+
+        self.runs.complete_run_source(
+            run_source,
+            status="succeeded",
+            completed_at=completed_at,
+            pages_fetched=summary.pages_fetched,
+            fetched_records=summary.fetched_records,
+            created=summary.created,
+            updated=summary.updated,
+            duplicates=summary.duplicates,
+            conflicts=summary.conflicts,
+            rejected=summary.rejected,
+            skipped_non_remote=summary.skipped_non_remote,
+        )
+        await self.database.commit()
+
+        self.runs.complete_run(
+            run,
+            status="succeeded",
+            completed_at=completed_at,
+        )
+        await self.database.commit()
+
+        return summary
+
+    async def sync_all(
+        self,
+        *,
+        max_pages: int = 1,
+    ) -> list[JobSyncSummary]:
+        if max_pages < 1:
+            raise ValueError("max_pages must be at least 1")
+
+        run = await self.runs.create_run()
+        await self.database.commit()
+        run_id = run.id
+
+        summaries: list[JobSyncSummary] = []
+
+        for source_name, source in self.sources.items():
+            source_max_pages = getattr(
+                source,
+                "max_pages",
+                max_pages,
+            )
+            pages_to_fetch = min(
+                max_pages,
+                source_max_pages,
+            )
+
+            run_source = await self.runs.create_run_source(
+                run_id,
+                source_name,
+            )
+            await self.database.commit()
+
+            try:
+                summary = await self._fetch_and_ingest_source(
+                    source,
+                    source_name,
+                    pages_to_fetch,
+                )
+            except JobSyncError as error:
+                completed_at = datetime.now(UTC)
+
+                self.runs.complete_run_source(
+                    run_source,
+                    status="failed",
+                    completed_at=completed_at,
+                    error_code=_SOURCE_SYNC_FAILED_ERROR_CODE,
+                    error_message=str(error),
+                )
+                await self.database.commit()
+
+                summaries.append(
+                    JobSyncSummary(
+                        source_name=source_name,
+                        error=str(error),
+                    )
+                )
+                continue
+
+            completed_at = datetime.now(UTC)
+
+            self.runs.complete_run_source(
+                run_source,
+                status="succeeded",
+                completed_at=completed_at,
+                pages_fetched=summary.pages_fetched,
+                fetched_records=summary.fetched_records,
+                created=summary.created,
+                updated=summary.updated,
+                duplicates=summary.duplicates,
+                conflicts=summary.conflicts,
+                rejected=summary.rejected,
+                skipped_non_remote=summary.skipped_non_remote,
+            )
+            await self.database.commit()
+
+            summaries.append(summary)
+
+        if not summaries or all(summary.error is None for summary in summaries):
+            overall_status = "succeeded"
+        elif all(summary.error is not None for summary in summaries):
+            overall_status = "failed"
+        else:
+            overall_status = "partial"
+
+        self.runs.complete_run(
+            run,
+            status=overall_status,
+            completed_at=datetime.now(UTC),
+        )
+        await self.database.commit()
+
+        return summaries
+
+    async def sync_arbeitnow(
+        self,
+        *,
+        max_pages: int = 1,
+    ) -> JobSyncSummary:
+        """Synchronize Arbeitnow for compatibility."""
+        return await self.sync_source(
+            ARBEITNOW_SOURCE_NAME,
+            max_pages=max_pages,
+        )
+
+    async def _fetch_and_ingest_source(
+        self,
+        source: JobSource,
+        source_name: str,
+        max_pages: int,
+    ) -> JobSyncSummary:
         summary = JobSyncSummary(source_name=source_name)
         observed_at = datetime.now(UTC)
 
@@ -118,53 +295,3 @@ class JobSyncService:
                 break
 
         return summary
-
-    async def sync_all(
-        self,
-        *,
-        max_pages: int = 1,
-    ) -> list[JobSyncSummary]:
-        if max_pages < 1:
-            raise ValueError("max_pages must be at least 1")
-
-        summaries: list[JobSyncSummary] = []
-
-        for source_name, source in self.sources.items():
-            source_max_pages = getattr(
-                source,
-                "max_pages",
-                max_pages,
-            )
-            pages_to_fetch = min(
-                max_pages,
-                source_max_pages,
-            )
-
-            try:
-                summary = await self.sync_source(
-                    source_name,
-                    max_pages=pages_to_fetch,
-                )
-            except JobSyncError as error:
-                summaries.append(
-                    JobSyncSummary(
-                        source_name=source_name,
-                        error=str(error),
-                    )
-                )
-                continue
-
-            summaries.append(summary)
-
-        return summaries
-
-    async def sync_arbeitnow(
-        self,
-        *,
-        max_pages: int = 1,
-    ) -> JobSyncSummary:
-        """Synchronize Arbeitnow for compatibility."""
-        return await self.sync_source(
-            ARBEITNOW_SOURCE_NAME,
-            max_pages=max_pages,
-        )

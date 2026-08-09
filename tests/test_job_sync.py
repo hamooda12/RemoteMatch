@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
+from uuid import uuid4
 
 import pytest
 
@@ -8,6 +10,8 @@ from app.integrations.job_sources.arbeitnow import (
     ARBEITNOW_SOURCE_NAME,
     ArbeitnowSourceError,
 )
+from app.models.job_sync_run import JobSyncRun, JobSyncRunSource
+from app.repositories.job_sync_run import JobSyncRunRepository
 from app.services.job_ingestion import (
     JobIngestionAction,
     JobIngestionConflictError,
@@ -51,6 +55,44 @@ class FakeFetchResult:
         return self.skipped_non_remote_records
 
 
+def fake_database() -> Mock:
+    database = Mock()
+    database.commit = AsyncMock()
+    return database
+
+
+def fake_job_sync_run_repository() -> Mock:
+    repository = Mock()
+    repository.create_run = AsyncMock(
+        side_effect=lambda: JobSyncRun(
+            id=uuid4(),
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+    )
+    repository.create_run_source = AsyncMock(
+        side_effect=lambda run_id, source_name: JobSyncRunSource(
+            id=uuid4(),
+            run_id=run_id,
+            source_name=source_name,
+            status="running",
+            started_at=datetime.now(UTC),
+            pages_fetched=0,
+            fetched_records=0,
+            created=0,
+            updated=0,
+            duplicates=0,
+            conflicts=0,
+            rejected=0,
+            skipped_non_remote=0,
+        )
+    )
+    repository.complete_run_source = JobSyncRunRepository.complete_run_source
+    repository.complete_run = JobSyncRunRepository.complete_run
+
+    return repository
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
@@ -89,10 +131,11 @@ async def test_sync_processes_multiple_pages_and_counts_results() -> None:
         )
     )
 
-    database = Mock()
+    database = fake_database()
     service = JobSyncService(
         database,
         arbeitnow_source=source,
+        runs=fake_job_sync_run_repository(),
     )
 
     ingest = AsyncMock(
@@ -152,10 +195,11 @@ async def test_sync_respects_maximum_page_limit() -> None:
         )
     )
 
-    database = Mock()
+    database = fake_database()
     service = JobSyncService(
         database,
         arbeitnow_source=source,
+        runs=fake_job_sync_run_repository(),
     )
 
     ingest = AsyncMock(
@@ -190,10 +234,11 @@ async def test_sync_rejects_invalid_page_limits(
         fetch_page=AsyncMock(),
     )
 
-    database = Mock()
+    database = fake_database()
     service = JobSyncService(
         database,
         arbeitnow_source=source,
+        runs=fake_job_sync_run_repository(),
     )
 
     with pytest.raises(
@@ -217,10 +262,11 @@ async def test_sync_wraps_source_failures() -> None:
         )
     )
 
-    database = Mock()
+    database = fake_database()
     service = JobSyncService(
         database,
         arbeitnow_source=source,
+        runs=fake_job_sync_run_repository(),
     )
 
     with pytest.raises(
