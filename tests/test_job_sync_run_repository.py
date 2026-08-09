@@ -41,9 +41,7 @@ async def job_sync_run_context() -> AsyncIterator[tuple[AsyncSession, list[UUID]
         finally:
             await database.rollback()
             if created_run_ids:
-                await database.execute(
-                    delete(JobSyncRun).where(JobSyncRun.id.in_(created_run_ids))
-                )
+                await database.execute(delete(JobSyncRun).where(JobSyncRun.id.in_(created_run_ids)))
                 await database.commit()
 
     await engine.dispose()
