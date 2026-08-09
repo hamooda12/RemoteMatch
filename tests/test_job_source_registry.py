@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.config import get_settings
 from app.integrations.job_sources import (
     JobSourceError,
     JobSourceFetchResult,
@@ -75,6 +76,69 @@ def test_registry_contains_configured_sources() -> None:
         "jobicy",
         "remoteok",
     )
+
+
+def test_registry_enables_all_five_sources_by_default() -> None:
+    settings = get_settings().model_copy()
+
+    registry = build_job_source_registry(settings)
+
+    assert set(registry) == {
+        "arbeitnow",
+        "greenhouse",
+        "himalayas",
+        "jobicy",
+        "remoteok",
+    }
+
+
+def test_registry_excludes_a_single_disabled_source() -> None:
+    settings = get_settings().model_copy(
+        update={"job_source_greenhouse_enabled": False},
+    )
+
+    registry = build_job_source_registry(settings)
+
+    assert "greenhouse" not in registry
+    assert set(registry) == {
+        "arbeitnow",
+        "himalayas",
+        "jobicy",
+        "remoteok",
+    }
+
+
+def test_registry_excludes_exactly_the_disabled_sources() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "job_source_himalayas_enabled": False,
+            "job_source_remoteok_enabled": False,
+        },
+    )
+
+    registry = build_job_source_registry(settings)
+
+    assert set(registry) == {
+        "arbeitnow",
+        "greenhouse",
+        "jobicy",
+    }
+
+
+def test_registry_is_empty_when_every_source_is_disabled() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "job_source_arbeitnow_enabled": False,
+            "job_source_greenhouse_enabled": False,
+            "job_source_himalayas_enabled": False,
+            "job_source_jobicy_enabled": False,
+            "job_source_remoteok_enabled": False,
+        },
+    )
+
+    registry = build_job_source_registry(settings)
+
+    assert registry == {}
 
 
 @pytest.mark.anyio
@@ -329,6 +393,45 @@ async def test_sync_all_reports_multiple_failures_independently() -> None:
     assert "second" in summaries[1].error
 
     assert summaries[0].error != summaries[1].error
+
+
+@pytest.mark.anyio
+async def test_sync_all_raises_without_creating_a_run_when_no_sources() -> None:
+    runs = fake_job_sync_run_repository()
+    service = JobSyncService(
+        fake_database(),
+        sources={},
+        runs=runs,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="No job sources are enabled.",
+    ):
+        await service.sync_all(max_pages=1)
+
+    runs.create_run.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_sync_source_rejects_a_disabled_source_not_in_registry() -> None:
+    """A disabled source is simply absent from the injected registry, so a
+    direct sync_source() request for it fails the same way an unknown
+    source name would."""
+    service = JobSyncService(
+        fake_database(),
+        sources={"arbeitnow": SimpleNamespace(name="arbeitnow", max_pages=1)},
+        runs=fake_job_sync_run_repository(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Unknown job source 'greenhouse'",
+    ):
+        await service.sync_source(
+            "greenhouse",
+            max_pages=1,
+        )
 
 
 @pytest.mark.anyio

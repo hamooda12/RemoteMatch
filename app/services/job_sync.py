@@ -159,6 +159,9 @@ class JobSyncService:
         if max_pages < 1:
             raise ValueError("max_pages must be at least 1")
 
+        if not self.sources:
+            raise ValueError("No job sources are enabled.")
+
         run = await self.runs.create_run()
         await self.database.commit()
         run_id = run.id

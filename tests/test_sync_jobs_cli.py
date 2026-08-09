@@ -104,6 +104,47 @@ def test_single_source_sync_exits_nonzero_on_failure(
     assert exit_code == 1
 
 
+def test_cli_rejects_a_source_name_not_in_available_choices(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A disabled source is absent from available_job_source_names(), so
+    requesting it directly is rejected by argparse's dynamic choices --
+    the same path used for any unknown source name."""
+    monkeypatch.setattr(
+        sync_jobs,
+        "available_job_source_names",
+        lambda: ("arbeitnow", "remoteok"),
+    )
+    monkeypatch.setattr(
+        sync_jobs.sys,
+        "argv",
+        ["sync_jobs.py", "--source", "greenhouse"],
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        sync_jobs.parse_arguments()
+
+    assert exit_info.value.code == 2
+    assert "invalid choice: 'greenhouse'" in capsys.readouterr().err
+
+
+def test_sync_all_exits_nonzero_when_every_source_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _patch_run_sync(
+        monkeypatch,
+        exception=ValueError("No job sources are enabled."),
+    )
+    monkeypatch.setattr(sync_jobs.sys, "argv", ["sync_jobs.py", "--source", "all"])
+
+    exit_code = sync_jobs.main()
+
+    assert exit_code != 0
+    assert "No job sources are enabled." in capsys.readouterr().err
+
+
 def test_database_failure_exits_nonzero(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

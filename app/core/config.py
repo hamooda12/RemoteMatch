@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     allowed_hosts: str = "localhost,127.0.0.1,testserver"
 
+    job_source_arbeitnow_enabled: bool = True
+    job_source_greenhouse_enabled: bool = True
+    job_source_himalayas_enabled: bool = True
+    job_source_jobicy_enabled: bool = True
+    job_source_remoteok_enabled: bool = True
+
     @property
     def secure_cookies(self) -> bool:
         return self.environment == "production"

@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.integrations.job_sources import (
     JobSourceError,
     JobSourceFetchResult,
+    build_job_source_registry,
 )
 from app.models.job import Job
 from app.models.job_sync_run import JobSyncRun
@@ -456,3 +457,96 @@ async def test_sync_all_continues_after_ingestion_rollback_recovery(
 
     await database.execute(delete(Job).where(Job.id == phantom_job.id))
     await database.commit()
+
+
+@pytest.mark.anyio
+async def test_sync_all_skips_disabled_sources_end_to_end(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disabled connector must be absent from the registry, unattempted,
+    and unpersisted -- proving the config flag propagates through
+    build_job_source_registry() into a real sync_all() run."""
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+
+    settings = get_settings().model_copy(
+        update={"job_source_jobicy_enabled": False},
+    )
+    registry = build_job_source_registry(settings)
+
+    assert "jobicy" not in registry
+
+    for source in registry.values():
+        monkeypatch.setattr(
+            source,
+            "fetch_page",
+            AsyncMock(
+                return_value=JobSourceFetchResult(
+                    records=(),
+                    page=1,
+                    has_next_page=False,
+                )
+            ),
+        )
+
+    service = JobSyncService(
+        database,
+        sources=registry,
+        runs=repository,
+    )
+
+    summaries = await service.sync_all(max_pages=1)
+    created_run_ids.append(created_runs[0].id)
+
+    assert "jobicy" not in {summary.source_name for summary in summaries}
+    assert {summary.source_name for summary in summaries} == {
+        "arbeitnow",
+        "greenhouse",
+        "himalayas",
+        "remoteok",
+    }
+
+    persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+
+    assert persisted_run is not None
+    assert persisted_run.status == "succeeded"
+    assert "jobicy" not in {source.source_name for source in persisted_run.sources}
+    assert {source.source_name for source in persisted_run.sources} == {
+        "arbeitnow",
+        "greenhouse",
+        "himalayas",
+        "remoteok",
+    }
+
+
+@pytest.mark.anyio
+async def test_sync_all_raises_before_creating_run_when_every_source_disabled(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    database, _created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+
+    settings = get_settings().model_copy(
+        update={
+            "job_source_arbeitnow_enabled": False,
+            "job_source_greenhouse_enabled": False,
+            "job_source_himalayas_enabled": False,
+            "job_source_jobicy_enabled": False,
+            "job_source_remoteok_enabled": False,
+        },
+    )
+    registry = build_job_source_registry(settings)
+
+    assert registry == {}
+
+    service = JobSyncService(
+        database,
+        sources=registry,
+        runs=repository,
+    )
+
+    with pytest.raises(ValueError, match="No job sources are enabled."):
+        await service.sync_all(max_pages=1)
+
+    assert created_runs == []
