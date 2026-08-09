@@ -100,8 +100,10 @@ def main() -> int:
 
     if arguments.source == "all":
         output: object = [asdict(summary) for summary in summaries]
+        exit_code = 1 if any(summary.error is not None for summary in summaries) else 0
     else:
         output = asdict(summaries[0])
+        exit_code = 0
 
     print(
         json.dumps(
@@ -110,7 +112,7 @@ def main() -> int:
         )
     )
 
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
