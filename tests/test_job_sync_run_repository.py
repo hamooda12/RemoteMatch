@@ -82,6 +82,8 @@ async def test_create_run_source_persists_and_links_to_run(
     assert source.status == "running"
     assert source.pages_fetched == 0
     assert source.fetched_records == 0
+    assert source.page_limit is None
+    assert source.pagination_exhausted is None
     assert source.error_code is None
     assert source.error_message is None
 
@@ -120,6 +122,39 @@ async def test_complete_run_source_updates_status_counts_and_completed_at(
     assert source.created == 8
     assert source.updated == 2
     assert source.duplicates == 0
+    assert source.page_limit is None
+    assert source.pagination_exhausted is None
+
+
+@pytest.mark.anyio
+async def test_complete_run_source_persists_pagination_metadata(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    database, created_run_ids = job_sync_run_context
+    repository = JobSyncRunRepository(database)
+
+    run = await repository.create_run()
+    await database.flush()
+    created_run_ids.append(run.id)
+
+    source = await repository.create_run_source(run.id, "himalayas")
+    await database.flush()
+
+    completed_at = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+    JobSyncRunRepository.complete_run_source(
+        source,
+        status="succeeded",
+        completed_at=completed_at,
+        pages_fetched=3,
+        fetched_records=30,
+        page_limit=3,
+        pagination_exhausted=True,
+    )
+    await database.commit()
+    await database.refresh(source)
+
+    assert source.page_limit == 3
+    assert source.pagination_exhausted is True
 
 
 @pytest.mark.anyio

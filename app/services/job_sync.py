@@ -20,10 +20,6 @@ from app.services.job_ingestion import (
 _SOURCE_SYNC_FAILED_ERROR_CODE = "SOURCE_SYNC_FAILED"
 
 
-class JobSyncError(Exception):
-    """Raised when a job-source synchronization fails."""
-
-
 @dataclass(slots=True)
 class JobSyncSummary:
     source_name: str
@@ -35,7 +31,28 @@ class JobSyncSummary:
     conflicts: int = 0
     rejected: int = 0
     skipped_non_remote: int = 0
+    page_limit: int | None = None
+    pagination_exhausted: bool | None = None
     error: str | None = None
+
+
+class JobSyncError(Exception):
+    """Raised when a job-source synchronization fails.
+
+    Carries the JobSyncSummary accumulated for pages that completed
+    successfully before the failure (i.e. NOT including the page whose
+    fetch_page() raised), so callers can persist accurate partial-failure
+    accounting instead of discarding all prior-page progress.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial_summary: JobSyncSummary | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.partial_summary = partial_summary
 
 
 class JobSyncService:
@@ -106,6 +123,11 @@ class JobSyncService:
             )
         except JobSyncError as error:
             completed_at = datetime.now(UTC)
+            partial_summary = error.partial_summary or JobSyncSummary(
+                source_name=source_name,
+                page_limit=max_pages,
+                pagination_exhausted=False,
+            )
 
             self.runs.complete_run_source(
                 run_source,
@@ -113,6 +135,16 @@ class JobSyncService:
                 completed_at=completed_at,
                 error_code=_SOURCE_SYNC_FAILED_ERROR_CODE,
                 error_message=str(error),
+                pages_fetched=partial_summary.pages_fetched,
+                fetched_records=partial_summary.fetched_records,
+                created=partial_summary.created,
+                updated=partial_summary.updated,
+                duplicates=partial_summary.duplicates,
+                conflicts=partial_summary.conflicts,
+                rejected=partial_summary.rejected,
+                skipped_non_remote=partial_summary.skipped_non_remote,
+                page_limit=partial_summary.page_limit,
+                pagination_exhausted=partial_summary.pagination_exhausted,
             )
             await self.database.commit()
 
@@ -139,6 +171,8 @@ class JobSyncService:
             conflicts=summary.conflicts,
             rejected=summary.rejected,
             skipped_non_remote=summary.skipped_non_remote,
+            page_limit=summary.page_limit,
+            pagination_exhausted=summary.pagination_exhausted,
         )
         await self.database.commit()
 
@@ -193,6 +227,11 @@ class JobSyncService:
                 )
             except JobSyncError as error:
                 completed_at = datetime.now(UTC)
+                partial_summary = error.partial_summary or JobSyncSummary(
+                    source_name=source_name,
+                    page_limit=pages_to_fetch,
+                    pagination_exhausted=False,
+                )
 
                 self.runs.complete_run_source(
                     run_source,
@@ -200,15 +239,21 @@ class JobSyncService:
                     completed_at=completed_at,
                     error_code=_SOURCE_SYNC_FAILED_ERROR_CODE,
                     error_message=str(error),
+                    pages_fetched=partial_summary.pages_fetched,
+                    fetched_records=partial_summary.fetched_records,
+                    created=partial_summary.created,
+                    updated=partial_summary.updated,
+                    duplicates=partial_summary.duplicates,
+                    conflicts=partial_summary.conflicts,
+                    rejected=partial_summary.rejected,
+                    skipped_non_remote=partial_summary.skipped_non_remote,
+                    page_limit=partial_summary.page_limit,
+                    pagination_exhausted=partial_summary.pagination_exhausted,
                 )
                 await self.database.commit()
 
-                summaries.append(
-                    JobSyncSummary(
-                        source_name=source_name,
-                        error=str(error),
-                    )
-                )
+                partial_summary.error = str(error)
+                summaries.append(partial_summary)
                 continue
 
             completed_at = datetime.now(UTC)
@@ -225,6 +270,8 @@ class JobSyncService:
                 conflicts=summary.conflicts,
                 rejected=summary.rejected,
                 skipped_non_remote=summary.skipped_non_remote,
+                page_limit=summary.page_limit,
+                pagination_exhausted=summary.pagination_exhausted,
             )
             await self.database.commit()
 
@@ -263,14 +310,21 @@ class JobSyncService:
         source_name: str,
         max_pages: int,
     ) -> JobSyncSummary:
-        summary = JobSyncSummary(source_name=source_name)
+        summary = JobSyncSummary(
+            source_name=source_name,
+            page_limit=max_pages,
+            pagination_exhausted=False,
+        )
         observed_at = datetime.now(UTC)
 
         for page in range(1, max_pages + 1):
             try:
                 fetch_result = await source.fetch_page(page=page)
             except JobSourceError as error:
-                raise JobSyncError(f"Unable to synchronize {source_name} page {page}.") from error
+                raise JobSyncError(
+                    f"Unable to synchronize {source_name} page {page}.",
+                    partial_summary=summary,
+                ) from error
 
             summary.pages_fetched += 1
             summary.fetched_records += len(fetch_result.records)
@@ -295,6 +349,7 @@ class JobSyncService:
                     summary.duplicates += 1
 
             if not fetch_result.has_next_page:
+                summary.pagination_exhausted = True
                 break
 
         return summary

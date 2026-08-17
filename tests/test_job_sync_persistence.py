@@ -23,6 +23,7 @@ from app.models.job_sync_run import JobSyncRun
 from app.repositories.job import JobRepository
 from app.repositories.job_sync_run import JobSyncRunRepository
 from app.schemas.job_ingestion import JobIngestionRecord
+from app.services.job_ingestion import JobIngestionAction
 from app.services.job_normalizer import build_job_values
 from app.services.job_sync import (
     JobSyncError,
@@ -150,6 +151,136 @@ async def test_sync_source_persists_run_and_source_on_success(
     assert persisted_source.fetched_records == summary.fetched_records
     assert persisted_source.error_code is None
     assert persisted_source.error_message is None
+    assert persisted_source.page_limit == 1
+    assert persisted_source.pagination_exhausted is True
+
+
+@pytest.mark.anyio
+async def test_sync_source_natural_pagination_completion_persists_exhausted_true(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    """A source whose final fetched page reports has_next_page=False -- the
+    loop reached natural completion within the page budget it was given."""
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+
+    source = SimpleNamespace(
+        name="himalayas",
+        max_pages=5,
+        fetch_page=AsyncMock(
+            side_effect=[
+                JobSourceFetchResult(records=(), page=1, has_next_page=True),
+                JobSourceFetchResult(records=(), page=2, has_next_page=False),
+            ]
+        ),
+    )
+
+    service = JobSyncService(
+        database,
+        sources={"himalayas": source},
+        runs=repository,
+    )
+
+    await service.sync_source("himalayas", max_pages=2)
+    created_run_ids.append(created_runs[0].id)
+
+    persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+    assert persisted_run is not None
+
+    persisted_source = persisted_run.sources[0]
+    assert persisted_source.page_limit == 2
+    assert persisted_source.pagination_exhausted is True
+    assert persisted_source.pages_fetched == 2
+
+
+@pytest.mark.anyio
+async def test_sync_source_page_limit_truncation_persists_exhausted_false(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    """A source that still reports has_next_page=True when the run's
+    page_limit is reached -- the loop was truncated, not naturally
+    completed. This must NOT be recorded the same as a true completion."""
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+
+    source = SimpleNamespace(
+        name="arbeitnow",
+        max_pages=5,
+        fetch_page=AsyncMock(
+            return_value=JobSourceFetchResult(records=(), page=1, has_next_page=True)
+        ),
+    )
+
+    service = JobSyncService(
+        database,
+        sources={"arbeitnow": source},
+        runs=repository,
+    )
+
+    await service.sync_source("arbeitnow", max_pages=1)
+    created_run_ids.append(created_runs[0].id)
+
+    persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+    assert persisted_run is not None
+
+    persisted_source = persisted_run.sources[0]
+    assert persisted_source.page_limit == 1
+    assert persisted_source.pagination_exhausted is False
+    assert persisted_source.pages_fetched == 1
+
+
+@pytest.mark.anyio
+async def test_sync_all_effective_page_limit_is_min_of_requested_and_source_max(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    """sync_all()'s effective page_limit is min(requested max_pages, the
+    source's own max_pages) -- not the raw requested value in isolation."""
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+
+    source = make_success_source("jobicy", max_pages=1)
+
+    service = JobSyncService(
+        database,
+        sources={"jobicy": source},
+        runs=repository,
+    )
+
+    await service.sync_all(max_pages=5)
+    created_run_ids.append(created_runs[0].id)
+
+    persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+    assert persisted_run is not None
+
+    persisted_source = persisted_run.sources[0]
+    assert persisted_source.page_limit == 1
+
+
+@pytest.mark.anyio
+async def test_sync_source_single_page_success_is_exhausted(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    """Greenhouse/RemoteOK/Jobicy-style connectors report has_next_page=False
+    on their only call -- this is technically "exhausted", but is not by
+    itself proof the fetched set is the source's complete inventory."""
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+    source = make_success_source("greenhouse", max_pages=1)
+
+    service = JobSyncService(
+        database,
+        sources={"greenhouse": source},
+        runs=repository,
+    )
+
+    await service.sync_source("greenhouse", max_pages=1)
+    created_run_ids.append(created_runs[0].id)
+
+    persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+    assert persisted_run is not None
+
+    persisted_source = persisted_run.sources[0]
+    assert persisted_source.pagination_exhausted is True
 
 
 @pytest.mark.anyio
@@ -184,6 +315,69 @@ async def test_sync_source_persists_run_and_source_on_failure(
     assert persisted_source.error_code == "SOURCE_SYNC_FAILED"
     assert persisted_source.error_message is not None
     assert "greenhouse" in persisted_source.error_message
+    assert persisted_source.pages_fetched == 0
+    assert persisted_source.page_limit == 1
+    assert persisted_source.pagination_exhausted is False
+
+
+@pytest.mark.anyio
+async def test_sync_source_persists_partial_progress_when_later_page_fails(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    """page 1 succeeds (20 records: 5 created, 10 updated, 5 duplicate),
+    page 2's fetch fails. The run-source row must record page 1's real
+    accumulated progress, not zeroed-out counts, and must NOT claim
+    pagination_exhausted -- natural completion was never reached."""
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+
+    page_one_records = tuple(object() for _ in range(20))
+    source = SimpleNamespace(
+        name="arbeitnow",
+        max_pages=5,
+        fetch_page=AsyncMock(
+            side_effect=[
+                JobSourceFetchResult(records=page_one_records, page=1, has_next_page=True),
+                FakeSourceError("boom"),
+            ]
+        ),
+    )
+
+    service = JobSyncService(
+        database,
+        sources={"arbeitnow": source},
+        runs=repository,
+    )
+    service.ingestion.ingest = AsyncMock(
+        side_effect=(
+            [SimpleNamespace(action=JobIngestionAction.CREATED) for _ in range(5)]
+            + [SimpleNamespace(action=JobIngestionAction.UPDATED) for _ in range(10)]
+            + [SimpleNamespace(action=JobIngestionAction.DUPLICATE) for _ in range(5)]
+        )
+    )
+
+    with pytest.raises(JobSyncError):
+        await service.sync_source("arbeitnow", max_pages=2)
+
+    created_run_ids.append(created_runs[0].id)
+
+    persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+    assert persisted_run is not None
+    assert persisted_run.status == "failed"
+
+    persisted_source = persisted_run.sources[0]
+    assert persisted_source.status == "failed"
+    assert persisted_source.error_code == "SOURCE_SYNC_FAILED"
+    assert persisted_source.pages_fetched == 1
+    assert persisted_source.fetched_records == 20
+    assert persisted_source.created == 5
+    assert persisted_source.updated == 10
+    assert persisted_source.duplicates == 5
+    assert persisted_source.conflicts == 0
+    assert persisted_source.rejected == 0
+    assert persisted_source.skipped_non_remote == 0
+    assert persisted_source.page_limit == 2
+    assert persisted_source.pagination_exhausted is False
 
 
 @pytest.mark.anyio
@@ -335,9 +529,13 @@ async def test_sync_all_continues_persisting_remaining_sources_after_one_fails(
     sources_by_name = {source.source_name: source for source in persisted_run.sources}
 
     assert sources_by_name["first"].status == "succeeded"
+    assert sources_by_name["first"].pagination_exhausted is True
     assert sources_by_name["second"].status == "failed"
     assert sources_by_name["second"].error_code == "SOURCE_SYNC_FAILED"
+    assert sources_by_name["second"].page_limit == 1
+    assert sources_by_name["second"].pagination_exhausted is False
     assert sources_by_name["third"].status == "succeeded"
+    assert sources_by_name["third"].pagination_exhausted is True
 
     assert len(summaries) == 3
 
@@ -550,3 +748,37 @@ async def test_sync_all_raises_before_creating_run_when_every_source_disabled(
         await service.sync_all(max_pages=1)
 
     assert created_runs == []
+
+
+@pytest.mark.anyio
+async def test_historical_run_source_without_pagination_metadata_reads_as_none(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    """Rows created before page_limit/pagination_exhausted existed (or by
+    any caller that omits them) must read back as NULL/None -- "unknown" --
+    never as a misleading False."""
+    database, created_run_ids = job_sync_run_context
+    repository = JobSyncRunRepository(database)
+
+    run = await repository.create_run()
+    await database.flush()
+    created_run_ids.append(run.id)
+
+    source = await repository.create_run_source(run.id, "arbeitnow")
+    await database.flush()
+
+    JobSyncRunRepository.complete_run_source(
+        source,
+        status="succeeded",
+        completed_at=datetime.now(UTC),
+        pages_fetched=1,
+        fetched_records=0,
+    )
+    await database.commit()
+
+    persisted_run = await repository.get_run_with_sources(run.id)
+    assert persisted_run is not None
+
+    persisted_source = persisted_run.sources[0]
+    assert persisted_source.page_limit is None
+    assert persisted_source.pagination_exhausted is None

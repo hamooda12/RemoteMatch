@@ -45,6 +45,8 @@ class JobSyncRunRepository:
         conflicts: int = 0,
         rejected: int = 0,
         skipped_non_remote: int = 0,
+        page_limit: int | None = None,
+        pagination_exhausted: bool | None = None,
     ) -> JobSyncRunSource:
         source.status = status
         source.completed_at = completed_at
@@ -58,6 +60,8 @@ class JobSyncRunRepository:
         source.conflicts = conflicts
         source.rejected = rejected
         source.skipped_non_remote = skipped_non_remote
+        source.page_limit = page_limit
+        source.pagination_exhausted = pagination_exhausted
 
         return source
 

@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -186,6 +187,51 @@ class JobSyncRunSource(Base):
         nullable=False,
         default=0,
         server_default=text("0"),
+    )
+
+    # --- Pagination-loop metadata (per source, per run) -----------------
+    # page_limit: the EFFECTIVE page cap that bounded this source's fetch
+    # loop in this run -- i.e. whatever value actually drove
+    # `for page in range(1, max_pages + 1)` in
+    # JobSyncService._fetch_and_ingest_source. This is min(requested
+    # max_pages, connector's own max_pages) as already computed by the
+    # caller (sync_source's validated max_pages, or sync_all's
+    # min(max_pages, source_max_pages)) -- never the raw CLI-requested
+    # value in isolation.
+    #
+    # pagination_exhausted: True only if a real run reached a connector
+    # response whose has_next_page was False (the connector itself said
+    # there was nothing more on that call). False for a completed/failed
+    # real run where natural pagination exhaustion was not reached -- i.e.
+    # the loop stopped because page_limit was reached while has_next_page
+    # was still True, or the fetch failed before a natural stop was
+    # reached.
+    #
+    # NULL on both fields means completion metadata was never populated --
+    # it is unknown, not "known to be incomplete". This covers: rows
+    # created before these columns existed; a row still status="running"
+    # (both fields are only set by complete_run_source(), never by
+    # create_run_source()); and rows left permanently "running" because
+    # the process crashed, was cancelled, or otherwise failed before
+    # completion metadata could be persisted. Do not treat NULL as
+    # equivalent to False, and do not assume it only occurs on
+    # pre-migration historical rows.
+    #
+    # IMPORTANT: pagination_exhausted is a narrow technical fact about one
+    # pagination loop finishing -- it is NOT a "snapshot complete" or
+    # "safe to reconcile" signal. Several connectors (Greenhouse, RemoteOK,
+    # Jobicy) report has_next_page=False on every single-page call by
+    # construction, which says nothing about whether the fetched results
+    # represent that source's full current job set. Do not add a derived
+    # property that reinterprets this field as reconciliation-safety.
+    page_limit: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    pagination_exhausted: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
     )
 
     error_code: Mapped[str | None] = mapped_column(

@@ -168,6 +168,8 @@ async def test_sync_processes_multiple_pages_and_counts_results() -> None:
     assert summary.conflicts == 1
     assert summary.rejected == 3
     assert summary.skipped_non_remote == 3
+    assert summary.page_limit == 2
+    assert summary.pagination_exhausted is True
 
     assert source.fetch_page.await_args_list == [
         call(page=1),
@@ -214,6 +216,8 @@ async def test_sync_respects_maximum_page_limit() -> None:
     assert summary.pages_fetched == 1
     assert summary.fetched_records == 1
     assert summary.created == 1
+    assert summary.page_limit == 1
+    assert summary.pagination_exhausted is False
 
     source.fetch_page.assert_awaited_once_with(page=1)
     ingest.assert_awaited_once()
@@ -281,3 +285,55 @@ async def test_sync_wraps_source_failures() -> None:
     )
 
     source.fetch_page.assert_awaited_once_with(page=1)
+
+    partial_summary = error_info.value.partial_summary
+    assert partial_summary is not None
+    assert partial_summary.pages_fetched == 0
+    assert partial_summary.fetched_records == 0
+    assert partial_summary.page_limit == 1
+    assert partial_summary.pagination_exhausted is False
+
+
+@pytest.mark.anyio
+async def test_sync_wraps_source_failures_preserves_prior_page_progress() -> None:
+    first_page_records = (object(), object())
+
+    source = SimpleNamespace(
+        fetch_page=AsyncMock(
+            side_effect=[
+                FakeFetchResult(
+                    records=first_page_records,
+                    page=1,
+                    has_next_page=True,
+                ),
+                ArbeitnowSourceError("The source is unavailable."),
+            ]
+        )
+    )
+
+    database = fake_database()
+    service = JobSyncService(
+        database,
+        arbeitnow_source=source,
+        runs=fake_job_sync_run_repository(),
+    )
+
+    ingest = AsyncMock(
+        side_effect=[
+            SimpleNamespace(action=JobIngestionAction.CREATED),
+            SimpleNamespace(action=JobIngestionAction.UPDATED),
+        ]
+    )
+    service.ingestion.ingest = ingest
+
+    with pytest.raises(JobSyncError, match="page 2") as error_info:
+        await service.sync_arbeitnow(max_pages=2)
+
+    partial_summary = error_info.value.partial_summary
+    assert partial_summary is not None
+    assert partial_summary.pages_fetched == 1
+    assert partial_summary.fetched_records == 2
+    assert partial_summary.created == 1
+    assert partial_summary.updated == 1
+    assert partial_summary.page_limit == 2
+    assert partial_summary.pagination_exhausted is False
