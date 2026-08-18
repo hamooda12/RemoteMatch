@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete
@@ -21,6 +21,7 @@ from app.integrations.job_sources import (
 from app.models.job import Job
 from app.models.job_sync_run import JobSyncRun
 from app.repositories.job import JobRepository
+from app.repositories.job_source_reference import JobSourceReferenceRepository
 from app.repositories.job_sync_run import JobSyncRunRepository
 from app.schemas.job_ingestion import JobIngestionRecord
 from app.services.job_ingestion import JobIngestionAction
@@ -117,6 +118,45 @@ def spy_repository(
     repository.create_run = create_run_spy
 
     return repository, created_runs
+
+
+def make_test_ingestion_record(
+    test_token: str,
+    *,
+    source_name: str,
+    source_job_id: str,
+) -> JobIngestionRecord:
+    return JobIngestionRecord(
+        source_name=f"job-sync-persist-{test_token}-{source_name}",
+        source_job_id=source_job_id,
+        source_url=f"https://jobs.example.com/{source_name}/{source_job_id}",
+        title="Backend Engineer",
+        company_name="Acme Remote",
+        description="Build remote things.",
+        location="Remote",
+        remote_regions=["Worldwide"],
+        published_at=datetime(2026, 8, 3, 10, 0, tzinfo=UTC),
+    )
+
+
+def make_record_source(
+    name: str,
+    records: tuple[JobIngestionRecord, ...],
+    *,
+    max_pages: int = 1,
+    has_next_page: bool = False,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        max_pages=max_pages,
+        fetch_page=AsyncMock(
+            return_value=JobSourceFetchResult(
+                records=records,
+                page=1,
+                has_next_page=has_next_page,
+            )
+        ),
+    )
 
 
 @pytest.mark.anyio
@@ -378,6 +418,171 @@ async def test_sync_source_persists_partial_progress_when_later_page_fails(
     assert persisted_source.skipped_non_remote == 0
     assert persisted_source.page_limit == 2
     assert persisted_source.pagination_exhausted is False
+
+
+@pytest.mark.anyio
+async def test_sync_source_correlates_references_to_its_run_source(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+    test_token = uuid4().hex
+
+    records = (
+        make_test_ingestion_record(test_token, source_name="arbeitnow", source_job_id="one"),
+        make_test_ingestion_record(test_token, source_name="arbeitnow", source_job_id="two"),
+    )
+    source = make_record_source("arbeitnow", records)
+
+    service = JobSyncService(
+        database,
+        sources={"arbeitnow": source},
+        runs=repository,
+    )
+
+    try:
+        await service.sync_source("arbeitnow", max_pages=1)
+        created_run_ids.append(created_runs[0].id)
+
+        persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+        assert persisted_run is not None
+        run_source_id = persisted_run.sources[0].id
+
+        reference_repository = JobSourceReferenceRepository(database)
+        for record in records:
+            reference = await reference_repository.get_by_source(
+                record.source_name,
+                record.source_job_id,
+            )
+            assert reference is not None
+            assert reference.last_seen_run_source_id == run_source_id
+    finally:
+        await database.execute(
+            delete(Job).where(Job.source_name.like(f"job-sync-persist-{test_token}%"))
+        )
+        await database.commit()
+
+
+@pytest.mark.anyio
+async def test_sync_all_correlates_each_source_to_its_own_run_source(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    """References observed by different sources within the same run must
+    each point at their own JobSyncRunSource, not the other source's."""
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+    test_token = uuid4().hex
+
+    first_record = make_test_ingestion_record(
+        test_token,
+        source_name="arbeitnow",
+        source_job_id="one",
+    )
+    second_record = make_test_ingestion_record(
+        test_token,
+        source_name="greenhouse",
+        source_job_id="one",
+    )
+
+    first_source = make_record_source("arbeitnow", (first_record,))
+    second_source = make_record_source("greenhouse", (second_record,))
+
+    service = JobSyncService(
+        database,
+        sources={
+            "arbeitnow": first_source,
+            "greenhouse": second_source,
+        },
+        runs=repository,
+    )
+
+    try:
+        await service.sync_all(max_pages=1)
+        created_run_ids.append(created_runs[0].id)
+
+        persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+        assert persisted_run is not None
+        run_sources_by_name = {source.source_name: source for source in persisted_run.sources}
+
+        reference_repository = JobSourceReferenceRepository(database)
+        first_reference = await reference_repository.get_by_source(
+            first_record.source_name,
+            first_record.source_job_id,
+        )
+        second_reference = await reference_repository.get_by_source(
+            second_record.source_name,
+            second_record.source_job_id,
+        )
+
+        assert first_reference is not None
+        assert second_reference is not None
+        assert first_reference.last_seen_run_source_id == run_sources_by_name["arbeitnow"].id
+        assert second_reference.last_seen_run_source_id == run_sources_by_name["greenhouse"].id
+        assert first_reference.last_seen_run_source_id != second_reference.last_seen_run_source_id
+    finally:
+        await database.execute(
+            delete(Job).where(Job.source_name.like(f"job-sync-persist-{test_token}%"))
+        )
+        await database.commit()
+
+
+@pytest.mark.anyio
+async def test_sync_source_partial_failure_retains_correlation_from_completed_pages(
+    job_sync_run_context: tuple[AsyncSession, list[UUID]],
+) -> None:
+    """page 1 succeeds and its references are committed with real ingestion
+    before page 2 fails. Even though the run-source ends up status="failed",
+    the correlation recorded for page 1's references must remain intact --
+    no reconciliation/rollback of already-committed correlations happens."""
+    database, created_run_ids = job_sync_run_context
+    repository, created_runs = spy_repository(database)
+    test_token = uuid4().hex
+
+    page_one_records = (
+        make_test_ingestion_record(test_token, source_name="arbeitnow", source_job_id="one"),
+        make_test_ingestion_record(test_token, source_name="arbeitnow", source_job_id="two"),
+    )
+    source = SimpleNamespace(
+        name="arbeitnow",
+        max_pages=5,
+        fetch_page=AsyncMock(
+            side_effect=[
+                JobSourceFetchResult(records=page_one_records, page=1, has_next_page=True),
+                FakeSourceError("boom"),
+            ]
+        ),
+    )
+
+    service = JobSyncService(
+        database,
+        sources={"arbeitnow": source},
+        runs=repository,
+    )
+
+    try:
+        with pytest.raises(JobSyncError):
+            await service.sync_source("arbeitnow", max_pages=2)
+
+        created_run_ids.append(created_runs[0].id)
+
+        persisted_run = await repository.get_run_with_sources(created_runs[0].id)
+        assert persisted_run is not None
+        persisted_source = persisted_run.sources[0]
+        assert persisted_source.status == "failed"
+
+        reference_repository = JobSourceReferenceRepository(database)
+        for record in page_one_records:
+            reference = await reference_repository.get_by_source(
+                record.source_name,
+                record.source_job_id,
+            )
+            assert reference is not None
+            assert reference.last_seen_run_source_id == persisted_source.id
+    finally:
+        await database.execute(
+            delete(Job).where(Job.source_name.like(f"job-sync-persist-{test_token}%"))
+        )
+        await database.commit()
 
 
 @pytest.mark.anyio
@@ -652,6 +857,16 @@ async def test_sync_all_continues_after_ingestion_rollback_recovery(
     assert set(sources_by_name) == {"colliding", "after"}
     assert sources_by_name["colliding"].status == "succeeded"
     assert sources_by_name["after"].status == "succeeded"
+
+    # The reference recovered via the rollback-recovery path must still end
+    # up correlated to the run-source that actually observed it.
+    reference_repository = JobSourceReferenceRepository(database)
+    colliding_reference = await reference_repository.get_by_source(
+        colliding_record.source_name,
+        colliding_record.source_job_id,
+    )
+    assert colliding_reference is not None
+    assert colliding_reference.last_seen_run_source_id == sources_by_name["colliding"].id
 
     await database.execute(delete(Job).where(Job.id == phantom_job.id))
     await database.commit()

@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,11 +116,14 @@ class JobSyncService:
         )
         await self.database.commit()
 
+        run_source_id = run_source.id
+
         try:
             summary = await self._fetch_and_ingest_source(
                 source,
                 source_name,
                 max_pages,
+                run_source_id,
             )
         except JobSyncError as error:
             completed_at = datetime.now(UTC)
@@ -218,12 +222,14 @@ class JobSyncService:
                 source_name,
             )
             await self.database.commit()
+            run_source_id = run_source.id
 
             try:
                 summary = await self._fetch_and_ingest_source(
                     source,
                     source_name,
                     pages_to_fetch,
+                    run_source_id,
                 )
             except JobSyncError as error:
                 completed_at = datetime.now(UTC)
@@ -309,6 +315,7 @@ class JobSyncService:
         source: JobSource,
         source_name: str,
         max_pages: int,
+        run_source_id: UUID,
     ) -> JobSyncSummary:
         summary = JobSyncSummary(
             source_name=source_name,
@@ -336,6 +343,7 @@ class JobSyncService:
                     ingestion_result = await self.ingestion.ingest(
                         record,
                         observed_at=observed_at,
+                        sync_run_source_id=run_source_id,
                     )
                 except JobIngestionConflictError:
                     summary.conflicts += 1

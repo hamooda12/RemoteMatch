@@ -34,6 +34,10 @@ class JobSourceReference(Base):
             "ix_job_source_references_job_id",
             "job_id",
         ),
+        Index(
+            "ix_job_source_references_last_seen_run_source_id",
+            "last_seen_run_source_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -76,6 +80,26 @@ class JobSourceReference(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+
+    # The JobSyncRunSource associated with the most recently *persisted*
+    # last_seen_run_source_id points to the most recent
+    # sync-run-correlated observation of this source reference.
+
+    # If an observation is performed without a sync_run_source_id,
+    # touch() intentionally leaves the existing correlation unchanged.
+
+    # This is a latest correlation pointer, not observation history.
+
+    # Before same-source overlap protection exists, overlapping runs
+    # remain last-write-wins and may not reflect chronological order.
+    last_seen_run_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "job_sync_run_sources.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
     )
 
     job: Mapped[Job] = relationship(back_populates="source_references")

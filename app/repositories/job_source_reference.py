@@ -35,6 +35,7 @@ class JobSourceReferenceRepository:
         source_job_id: str,
         source_url: str,
         observed_at: datetime,
+        sync_run_source_id: UUID | None = None,
     ) -> JobSourceReference:
         reference = JobSourceReference(
             job_id=job_id,
@@ -43,6 +44,7 @@ class JobSourceReferenceRepository:
             source_url=source_url,
             first_seen_at=observed_at,
             last_seen_at=observed_at,
+            last_seen_run_source_id=sync_run_source_id,
         )
         self.database.add(reference)
         return reference
@@ -53,8 +55,12 @@ class JobSourceReferenceRepository:
         *,
         source_url: str,
         observed_at: datetime,
+        sync_run_source_id: UUID | None = None,
     ) -> JobSourceReference:
         reference.source_url = source_url
         reference.last_seen_at = observed_at
+
+        if sync_run_source_id is not None:
+            reference.last_seen_run_source_id = sync_run_source_id
 
         return reference

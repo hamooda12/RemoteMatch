@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import (
 from app.core.config import get_settings
 from app.models.job import Job
 from app.models.job_source_reference import JobSourceReference
+from app.models.job_sync_run import JobSyncRun, JobSyncRunSource
 from app.repositories.job_source_reference import JobSourceReferenceRepository
+from app.repositories.job_sync_run import JobSyncRunRepository
 from app.schemas.job_ingestion import JobIngestionRecord
 from app.services.job_ingestion import (
     JobIngestionAction,
@@ -128,6 +130,27 @@ async def count_references_for_job(
     )
 
     return int(total or 0)
+
+
+async def create_test_run_source(
+    database: AsyncSession,
+    *,
+    source_name: str = "arbeitnow",
+) -> JobSyncRunSource:
+    repository = JobSyncRunRepository(database)
+    run = await repository.create_run()
+    await database.flush()
+    run_source = await repository.create_run_source(run.id, source_name)
+    await database.commit()
+    return run_source
+
+
+async def delete_test_run(
+    database: AsyncSession,
+    run_id,
+) -> None:
+    await database.execute(delete(JobSyncRun).where(JobSyncRun.id == run_id))
+    await database.commit()
 
 
 @pytest.mark.anyio
@@ -758,6 +781,7 @@ async def test_concurrent_first_time_create_recovers_without_conflict(
         source_suffix="source-race",
         source_job_id="job-race",
     )
+    run_source = await create_test_run_source(database)
 
     engine = create_async_engine(
         get_settings().database_url,
@@ -771,7 +795,10 @@ async def test_concurrent_first_time_create_recovers_without_conflict(
 
     async def ingest_via_new_session():
         async with session_factory() as session:
-            return await JobIngestionService(session).ingest(record)
+            return await JobIngestionService(session).ingest(
+                record,
+                sync_run_source_id=run_source.id,
+            )
 
     try:
         results = await asyncio.gather(
@@ -789,12 +816,21 @@ async def test_concurrent_first_time_create_recovers_without_conflict(
     assert await count_test_jobs(database, test_token) == 1
     assert await count_references_for_job(database, results[0].job.id) == 1
 
+    # The race-recovery path must persist the correlation on the surviving
+    # reference just like the non-racing path does.
+    reference = await get_reference(database, record)
+    assert reference is not None
+    assert reference.last_seen_run_source_id == run_source.id
+
+    await delete_test_run(database, run_source.run_id)
+
 
 @pytest.mark.anyio
 async def test_concurrent_new_secondary_reference_recovers_without_conflict(
     ingestion_context: tuple[AsyncSession, str],
 ) -> None:
     database, test_token = ingestion_context
+    run_source = await create_test_run_source(database)
 
     primary_result = await JobIngestionService(database).ingest(create_ingestion_record(test_token))
 
@@ -816,7 +852,10 @@ async def test_concurrent_new_secondary_reference_recovers_without_conflict(
 
     async def ingest_via_new_session():
         async with session_factory() as session:
-            return await JobIngestionService(session).ingest(secondary_record)
+            return await JobIngestionService(session).ingest(
+                secondary_record,
+                sync_run_source_id=run_source.id,
+            )
 
     try:
         results = await asyncio.gather(
@@ -842,3 +881,106 @@ async def test_concurrent_new_secondary_reference_recovers_without_conflict(
         )
     )
     assert reference_count == 1
+
+    secondary_reference = await get_reference(database, secondary_record)
+    assert secondary_reference is not None
+    assert secondary_reference.last_seen_run_source_id == run_source.id
+
+    await delete_test_run(database, run_source.run_id)
+
+
+@pytest.mark.anyio
+async def test_first_time_create_persists_run_source_correlation(
+    ingestion_context: tuple[AsyncSession, str],
+) -> None:
+    database, test_token = ingestion_context
+    service = JobIngestionService(database)
+    run_source = await create_test_run_source(database)
+
+    record = create_ingestion_record(test_token)
+    await service.ingest(record, sync_run_source_id=run_source.id)
+
+    reference = await get_reference(database, record)
+    assert reference is not None
+    assert reference.last_seen_run_source_id == run_source.id
+
+    await delete_test_run(database, run_source.run_id)
+
+
+@pytest.mark.anyio
+async def test_existing_reference_touch_replaces_run_source_correlation(
+    ingestion_context: tuple[AsyncSession, str],
+) -> None:
+    """Pointer-replacement semantics at the ingestion layer: re-observing the
+    same reference under a later run-source moves the pointer forward. No
+    historical membership with the first run-source is retained."""
+    database, test_token = ingestion_context
+    service = JobIngestionService(database)
+    first_run_source = await create_test_run_source(database, source_name="arbeitnow")
+    second_run_source = await create_test_run_source(database, source_name="greenhouse")
+
+    record = create_ingestion_record(test_token)
+    await service.ingest(record, sync_run_source_id=first_run_source.id)
+
+    reference = await get_reference(database, record)
+    assert reference is not None
+    assert reference.last_seen_run_source_id == first_run_source.id
+
+    updated_record = create_ingestion_record(test_token, title="Updated Title")
+    await service.ingest(updated_record, sync_run_source_id=second_run_source.id)
+
+    reference = await get_reference(database, record)
+    assert reference is not None
+    assert reference.last_seen_run_source_id == second_run_source.id
+
+    await delete_test_run(database, first_run_source.run_id)
+    await delete_test_run(database, second_run_source.run_id)
+
+
+@pytest.mark.anyio
+async def test_secondary_reference_persists_its_own_run_source_correlation(
+    ingestion_context: tuple[AsyncSession, str],
+) -> None:
+    database, test_token = ingestion_context
+    service = JobIngestionService(database)
+    primary_run_source = await create_test_run_source(database, source_name="arbeitnow")
+    secondary_run_source = await create_test_run_source(database, source_name="greenhouse")
+
+    primary_record = create_ingestion_record(
+        test_token,
+        source_suffix="source-one",
+        source_job_id="external-one",
+    )
+    await service.ingest(primary_record, sync_run_source_id=primary_run_source.id)
+
+    secondary_record = create_ingestion_record(
+        test_token,
+        source_suffix="source-two",
+        source_job_id="external-two",
+    )
+    await service.ingest(secondary_record, sync_run_source_id=secondary_run_source.id)
+
+    primary_reference = await get_reference(database, primary_record)
+    secondary_reference = await get_reference(database, secondary_record)
+    assert primary_reference is not None
+    assert secondary_reference is not None
+    assert primary_reference.last_seen_run_source_id == primary_run_source.id
+    assert secondary_reference.last_seen_run_source_id == secondary_run_source.id
+
+    await delete_test_run(database, primary_run_source.run_id)
+    await delete_test_run(database, secondary_run_source.run_id)
+
+
+@pytest.mark.anyio
+async def test_ingest_without_sync_run_source_id_leaves_correlation_null(
+    ingestion_context: tuple[AsyncSession, str],
+) -> None:
+    database, test_token = ingestion_context
+    service = JobIngestionService(database)
+
+    record = create_ingestion_record(test_token)
+    await service.ingest(record)
+
+    reference = await get_reference(database, record)
+    assert reference is not None
+    assert reference.last_seen_run_source_id is None

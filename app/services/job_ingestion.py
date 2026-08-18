@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import cast
+from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,7 @@ class JobIngestionService:
         record: JobIngestionRecord,
         *,
         observed_at: datetime | None = None,
+        sync_run_source_id: UUID | None = None,
     ) -> JobIngestionResult:
         values = build_job_values(
             record,
@@ -67,6 +69,7 @@ class JobIngestionService:
                 existing_reference,
                 record,
                 values,
+                sync_run_source_id,
             )
             await self._commit_or_raise(job)
 
@@ -80,7 +83,12 @@ class JobIngestionService:
                 duplicate_job,
                 values,
             )
-            await self._create_reference(duplicate_job, record, values)
+            await self._create_reference(
+                duplicate_job,
+                record,
+                values,
+                sync_run_source_id,
+            )
 
             try:
                 await self.database.commit()
@@ -92,6 +100,7 @@ class JobIngestionService:
                     record,
                     values,
                     error,
+                    sync_run_source_id,
                 )
 
             return JobIngestionResult(
@@ -110,9 +119,15 @@ class JobIngestionService:
                 record,
                 values,
                 error,
+                sync_run_source_id,
             )
 
-        await self._create_reference(job, record, values)
+        await self._create_reference(
+            job,
+            record,
+            values,
+            sync_run_source_id,
+        )
 
         try:
             await self.database.commit()
@@ -124,6 +139,7 @@ class JobIngestionService:
                 record,
                 values,
                 error,
+                sync_run_source_id,
             )
 
         return JobIngestionResult(
@@ -136,6 +152,7 @@ class JobIngestionService:
         record: JobIngestionRecord,
         values: dict[str, object],
         original_error: IntegrityError,
+        sync_run_source_id: UUID | None = None,
     ) -> JobIngestionResult:
         existing_reference = await self.source_references.get_by_source(
             record.source_name,
@@ -160,6 +177,7 @@ class JobIngestionService:
                 existing_reference,
                 record,
                 values,
+                sync_run_source_id,
             )
             await self._commit_or_raise(job)
 
@@ -177,7 +195,12 @@ class JobIngestionService:
             duplicate_job,
             values,
         )
-        await self._create_reference(duplicate_job, record, values)
+        await self._create_reference(
+            duplicate_job,
+            record,
+            values,
+            sync_run_source_id,
+        )
         await self._commit_or_raise(duplicate_job)
 
         return JobIngestionResult(
@@ -210,6 +233,7 @@ class JobIngestionService:
         existing_reference: JobSourceReference,
         record: JobIngestionRecord,
         values: dict[str, object],
+        sync_run_source_id: UUID | None = None,
     ) -> Job:
         job = existing_reference.job
 
@@ -222,6 +246,7 @@ class JobIngestionService:
             existing_reference,
             source_url=cast(str, values["source_url"]),
             observed_at=cast(datetime, values["last_seen_at"]),
+            sync_run_source_id=sync_run_source_id,
         )
 
         return job
@@ -231,6 +256,7 @@ class JobIngestionService:
         job: Job,
         record: JobIngestionRecord,
         values: dict[str, object],
+        sync_run_source_id: UUID | None = None,
     ) -> None:
         await self.source_references.create(
             job_id=job.id,
@@ -238,6 +264,7 @@ class JobIngestionService:
             source_job_id=record.source_job_id,
             source_url=cast(str, values["source_url"]),
             observed_at=cast(datetime, values["last_seen_at"]),
+            sync_run_source_id=sync_run_source_id,
         )
 
     # Scalar enrichment fields: a "current state" value with one source of
