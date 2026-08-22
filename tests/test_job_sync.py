@@ -19,6 +19,7 @@ from app.services.job_ingestion import (
 from app.services.job_sync import (
     JobSyncError,
     JobSyncService,
+    always_acquired_source_lock,
 )
 
 
@@ -136,6 +137,7 @@ async def test_sync_processes_multiple_pages_and_counts_results() -> None:
         database,
         arbeitnow_source=source,
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     ingest = AsyncMock(
@@ -202,6 +204,7 @@ async def test_sync_respects_maximum_page_limit() -> None:
         database,
         arbeitnow_source=source,
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     ingest = AsyncMock(
@@ -243,6 +246,7 @@ async def test_sync_rejects_invalid_page_limits(
         database,
         arbeitnow_source=source,
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     with pytest.raises(
@@ -271,6 +275,7 @@ async def test_sync_wraps_source_failures() -> None:
         database,
         arbeitnow_source=source,
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     with pytest.raises(
@@ -316,6 +321,7 @@ async def test_sync_wraps_source_failures_preserves_prior_page_progress() -> Non
         database,
         arbeitnow_source=source,
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     ingest = AsyncMock(

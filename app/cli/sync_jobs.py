@@ -52,7 +52,7 @@ async def run_sync(
 ) -> list[JobSyncSummary]:
     try:
         async with AsyncSessionFactory() as database:
-            service = JobSyncService(database)
+            service = JobSyncService(database, engine=engine)
 
             if source_name == "all":
                 return await service.sync_all(

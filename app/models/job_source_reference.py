@@ -91,8 +91,11 @@ class JobSourceReference(Base):
 
     # This is a latest correlation pointer, not observation history.
 
-    # Before same-source overlap protection exists, overlapping runs
-    # remain last-write-wins and may not reflect chronological order.
+    # Same-source overlap protection (Task B3, see
+    # app/db/advisory_lock.py) guarantees at most one authoritative sync
+    # per source can be ingesting at a time under supported JobSyncService
+    # paths, so this pointer reflects the most recently *completed*
+    # same-source run, not merely the most recently committed write.
     last_seen_run_source_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey(

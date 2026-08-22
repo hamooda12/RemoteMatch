@@ -16,6 +16,7 @@ from app.repositories.job_sync_run import JobSyncRunRepository
 from app.services.job_sync import (
     JobSyncError,
     JobSyncService,
+    always_acquired_source_lock,
 )
 
 
@@ -161,6 +162,7 @@ async def test_syncs_generic_source_by_name() -> None:
             source.name: source,
         },
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     summary = await service.sync_source(
@@ -209,6 +211,7 @@ async def test_sync_all_processes_every_source() -> None:
             second_source.name: second_source,
         },
         runs=runs,
+        source_lock=always_acquired_source_lock,
     )
 
     summaries = await service.sync_all(max_pages=1)
@@ -269,6 +272,7 @@ async def test_sync_all_respects_each_source_page_limit() -> None:
             single_page_source.name: (single_page_source),
         },
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     summaries = await service.sync_all(max_pages=3)
@@ -327,6 +331,7 @@ async def test_sync_all_continues_after_one_source_fails() -> None:
             third_source.name: third_source,
         },
         runs=runs,
+        source_lock=always_acquired_source_lock,
     )
 
     summaries = await service.sync_all(max_pages=1)
@@ -374,6 +379,7 @@ async def test_sync_all_reports_multiple_failures_independently() -> None:
             second_source.name: second_source,
         },
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     summaries = await service.sync_all(max_pages=1)
@@ -402,6 +408,7 @@ async def test_sync_all_raises_without_creating_a_run_when_no_sources() -> None:
         fake_database(),
         sources={},
         runs=runs,
+        source_lock=always_acquired_source_lock,
     )
 
     with pytest.raises(
@@ -422,6 +429,7 @@ async def test_sync_source_rejects_a_disabled_source_not_in_registry() -> None:
         fake_database(),
         sources={"arbeitnow": SimpleNamespace(name="arbeitnow", max_pages=1)},
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     with pytest.raises(
@@ -440,6 +448,7 @@ async def test_sync_rejects_unknown_source() -> None:
         fake_database(),
         sources={},
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     with pytest.raises(
@@ -466,6 +475,7 @@ async def test_generic_source_failure_is_wrapped() -> None:
             source.name: source,
         },
         runs=fake_job_sync_run_repository(),
+        source_lock=always_acquired_source_lock,
     )
 
     with pytest.raises(
